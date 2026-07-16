@@ -118,3 +118,111 @@ def run_with_notification() -> int:
     raise NotImplementedError(
         "run_with_notification is implemented in Chunk 3 (Task 12)"
     )
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Read a KEY=VALUE env file. Tolerates blanks, comments, single/double quotes.
+
+    Empty lines and comment-only lines are silently ignored. Malformed lines
+    (no `=`) are skipped (matches the dotenv ecosystem convention).
+    """
+    out: dict[str, str] = {}
+    text = path.read_text(encoding="utf-8")
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+def write_env_file(path: Path, env: dict[str, str]) -> None:
+    """Write atomically: write to <path>.tmp, fsync, rename onto path. chmod 0o600."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    body = "\n".join(f"{k}={v}" for k, v in env.items()) + "\n"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(body)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    os.chmod(path, ENV_FILE_MODE)
+
+
+def write_plist(plist_xml: str, dest: Path, *, force: bool = False) -> None:
+    """Write the plist, creating parent dir. Refuse to overwrite unless force=True."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and not force:
+        existing = dest.read_text(encoding="utf-8")
+        if existing == plist_xml:
+            return
+        raise FileExistsError(
+            f"{dest} exists with different content; pass force=True to overwrite"
+        )
+    dest.write_text(plist_xml, encoding="utf-8")
+
+
+def install(
+    *,
+    schedule_time: str,
+    scorer_root: Path,
+    fanqie_story_root: Path,
+    force: bool = False,
+    update_env: bool = False,
+) -> None:
+    """Idempotent install (spec §3.2 `install`).
+
+    Steps (each short-circuits the next on failure):
+      0. confirm `fanqie-story-run` console script exists on disk
+      1. ensure LOG_DIR exists (chmod 0o700)
+      2. ensure ENV_FILE.parent exists (chmod 0o700)
+      3. if update_env OR env file missing: persist the API key
+      4. render the plist; refuse overwrite unless force=True
+      5. subprocess: launchctl load -w <PLIST_PATH>
+    """
+    if not DAEMON_RUN_SCRIPT.exists():
+        raise FileNotFoundError(
+            f"could not find {DAEMON_RUN_SCRIPT} — activate your venv "
+            f"and re-run `pip install -e .` to register the console script."
+        )
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(LOG_DIR, DIR_MODE_USER_ONLY)
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(ENV_FILE.parent, DIR_MODE_USER_ONLY)
+
+    need_key_write = update_env or not ENV_FILE.exists()
+    if need_key_write:
+        # MINIMAX_API_KEY (canonical) → ANTHROPIC_API_KEY (legacy fallback).
+        key = (
+            os.environ.get("MINIMAX_API_KEY", "").strip()
+            or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        )
+        if not key:
+            from fanqie_short_story.config import ConfigError
+            raise ConfigError(
+                "No API key in environment. Set MINIMAX_API_KEY (preferred) "
+                "or ANTHROPIC_API_KEY (legacy fallback) before running "
+                "`daemon install`."
+            )
+        write_env_file(ENV_FILE, {"MINIMAX_API_KEY": key})
+
+    plist_xml = render_plist(
+        schedule_time=schedule_time,
+        log_dir=LOG_DIR,
+        scorer_root=scorer_root,
+        fanqie_story_root=fanqie_story_root,
+    )
+    write_plist(plist_xml, PLIST_PATH, force=force)
+
+    subprocess.run(
+        ["launchctl", "load", "-w", str(PLIST_PATH)],
+        check=True,
+    )
