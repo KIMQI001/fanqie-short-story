@@ -25,7 +25,7 @@ _ASPECT_TERMS = ("钩子", "情节", "人物", "节奏", "语言")
 @dataclass
 class LLMCritiqueReport:
     passed: bool
-    notes: str                              # full prose; "" if PASS
+    notes: str                              # full prose; always populated (sentinel on empty response)
     mentioned_aspects: list[str] = field(default_factory=list)
     raw_response: str = ""
 
