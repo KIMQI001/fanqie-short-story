@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from string import Template
 
+import click
+
 
 # ---------------------------------------------------------------------------
 # Constants (spec §3.2)
@@ -151,8 +153,18 @@ def run_once(
             with redirect_stdout(logf), redirect_stderr(logf):
                 _cli_main(args=cli_args, standalone_mode=False)
         return 0
-    except SystemExit as exc:
-        return int(getattr(exc, "code", 0) or 0)
+    except (SystemExit, click.exceptions.Exit) as exc:
+        # Click with standalone_mode=False raises click.exceptions.Exit (a
+        # RuntimeError subclass, NOT a SystemExit subclass) for ctx.exit(N).
+        # SystemExit is still possible from sys.exit() inside Click internals.
+        code = getattr(exc, "exit_code", getattr(exc, "code", 1))
+        if isinstance(code, int):
+            return code
+        return 1
+    except Exception:
+        # Any other exception (e.g. KeyboardInterrupt already swallowed above;
+        # truly unexpected exception) → fail the daemon run so launchd records it.
+        return 1
 
 
 def _run_scan_in_process() -> int:
@@ -199,10 +211,15 @@ def run_with_notification() -> int:
       5. Return the original exit code.
     """
     # 1. Load API key from disk if missing in this process's env.
-    if not (os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+    #    Use direct assignment (not setdefault) so empty-string values are
+    #    also overwritten — os.environ.get() returns falsy for empty strings,
+    #    but setdefault() would skip them, causing the empty value to "win"
+    #    and the disk value to never be loaded.
+    if not os.environ.get("MINIMAX_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
         if ENV_FILE.exists():
             for k, v in parse_env_file(ENV_FILE).items():
-                os.environ.setdefault(k, v)
+                if not os.environ.get(k):  # only set if empty OR missing
+                    os.environ[k] = v
 
     # 2. Run.
     rc = _run_scan_in_process()
