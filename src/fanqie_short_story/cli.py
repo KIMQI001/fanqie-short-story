@@ -197,7 +197,7 @@ def daemon() -> None:
 @click.option("--scorer-root", default=None,
               help="Path to fanqie-topic-scorer repo")
 @click.option("--fanqie-story-root", default=None,
-              help="Path to this fanqie-short-story repo (default: auto-detect via git rev-parse)")
+              help="Path to this fanqie-short-story repo (default: current directory)")
 @click.option("--force/--no-force", default=False)
 @click.option("--update-env/--no-update-env", default=False)
 def daemon_install(schedule_time: str, scorer_root: str | None,
@@ -263,13 +263,11 @@ def daemon_status() -> None:
 @daemon.command("run-once")
 @click.option("--config", default="config/defaults.yaml")
 @click.option("--log-dir", default=None, type=click.Path())
-@click.pass_context
-def daemon_run_once(ctx: click.Context, config: str, log_dir: str | None) -> None:
+def daemon_run_once(config: str, log_dir: str | None) -> None:
     """Run one daily batch (the plist's ProgramArguments target)."""
     if log_dir is None:
         log_dir = str(LOG_DIR)
     Path(log_dir).mkdir(parents=True, exist_ok=True)
-    cfg: Config = ctx.obj
     rc = daemon_mod.run_once(
         config_path=Path(config),
         log_dir=Path(log_dir),
