@@ -5,3 +5,6 @@ __pycache__/
 output/
 *.egg-info/
 .superpowers/
+
+# Worktrees (isolated workspaces)
+.worktrees/
