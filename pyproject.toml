@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fanqie-short-story"
-version = "0.1.0"
+version = "0.3.0"
 description = "Generate 番茄短故事 (1-2万字) from a hook + genre"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",
+    "filelock>=3.12,<4.0",
     "httpx>=0.27",
     "pydantic>=2.6",
     "pyyaml>=6.0",
@@ -23,6 +24,7 @@ dev = [
 
 [project.scripts]
 fanqie-story = "fanqie_short_story.cli:main"
+fanqie-story-run = "fanqie_short_story.daemon:run_with_notification"
 
 [tool.setuptools.packages.find]
 where = ["src"]
