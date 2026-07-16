@@ -76,3 +76,21 @@ SYNOPSIS_USER_TEMPLATE = """钩子: {hook}
 {body_head}
 
 写一段简介，{n} 字左右，前 30 字必须抓人。"""
+
+
+LLM_CRITIQUE_SYSTEM = (
+    "你是一个番茄短篇评审。从 5 个维度评估正文：钩子强度、"
+    "情节闭环、人物一致性、节奏、语言。"
+    "直接输出评审意见，不要 markdown 围栏，不要 '以下是评审' 等开场白。"
+    "最后一行独立写出 VERDICT: PASS 或 VERDICT: FAIL。"
+)
+
+LLM_CRITIQUE_USER_TEMPLATE = """钩子: {hook}
+类型: {genre}
+目标字数: {target_length}
+
+## 待评审正文
+{body}
+
+逐项评估（钩子强度 / 情节闭环 / 人物一致性 / 节奏 / 语言）。
+每项给出 1-2 句评价。最后一行独立写出 VERDICT: PASS 或 VERDICT: FAIL。"""

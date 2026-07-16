@@ -55,6 +55,20 @@ for manual paste into 番茄作家后台. Recommended workflow:
 5. Upload `cover.jpg` as 封面
 6. Pick a 标签 and 提交审核
 
+## Config (defaults.yaml)
+
+v0.2.0 adds four keys under `critique:` in `config/defaults.yaml`:
+
+```yaml
+critique:
+  llm_enabled: true                # kill switch for LLM critic
+  llm_max_tokens: 2000             # output budget for critic
+  llm_temperature: 0.3             # low for stable verdicts
+  llm_max_calls_per_story: 3       # cap (independent of retries)
+```
+
+Set `llm_enabled: false` to revert to v0.1.0's heuristic-only critique.
+
 ## Architecture
 
 See `docs/superpowers/specs/2026-07-16-fanqie-short-story-design.md` (in the

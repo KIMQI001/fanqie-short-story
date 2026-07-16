@@ -1,2 +1,2 @@
 """fanqie-short-story: generate 番茄短故事 (1-2万字) from a hook + genre."""
-__version__ = "0.1.0"
+__version__ = "0.2.0"

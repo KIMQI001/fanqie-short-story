@@ -5,6 +5,7 @@ Run manually:
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -39,3 +40,7 @@ def test_real_generate_one_chuanqi_story(tmp_path: Path) -> None:
     assert 4000 <= len(body_text) <= 12000
     assert "未完待续" not in body_text
     assert "林晚" in body_text or "侯府" in body_text  # hooked into the prompt
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert data["critique_strategy"] == "heuristic_then_llm"
+    assert data["heuristic_attempts"] >= 1
+    assert data["llm_critic_attempts"] >= 0

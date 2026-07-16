@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fanqie_short_story.body import Body
-from fanqie_short_story.critique import CritiqueReport, critique
+from fanqie_short_story.critique import CritiqueReport, heuristic_critique
 
 
 def _body(text: str) -> Body:
@@ -16,7 +16,7 @@ def test_critique_passes_on_good_body() -> None:
         + ("情节推进中。" * 1000)
         + "真相大白，林晚归隐山林，从此再无风波。"
     )
-    r = critique(_body(text), hook="重生侯府", target_length=6500)
+    r = heuristic_critique(_body(text), hook="重生侯府", target_length=6500)
     assert isinstance(r, CritiqueReport)
     assert r.passed is True
     assert r.failed_gates == []
@@ -30,7 +30,7 @@ def test_critique_fails_when_weak_hook() -> None:
         + ("情节。" * 2000)
         + "结局圆满。"
     )
-    r = critique(_body(text), hook="重生侯府", target_length=4000)
+    r = heuristic_critique(_body(text), hook="重生侯府", target_length=4000)
     assert r.passed is False
     assert "hook" in r.failed_gates
 
@@ -41,7 +41,7 @@ def test_critique_fails_on_unresolved_ending() -> None:
         + ("推进。" * 2000)
         + "未完待续"
     )
-    r = critique(_body(text), hook="重生侯府", target_length=4000)
+    r = heuristic_critique(_body(text), hook="重生侯府", target_length=4000)
     assert "ending" in r.failed_gates
 
 
@@ -51,7 +51,7 @@ def test_critique_fails_on_length_out_of_window() -> None:
         + ("x" * 100)
         + "结局圆满收束。"
     )
-    r = critique(_body(text), hook="h", target_length=8000)
+    r = heuristic_critique(_body(text), hook="h", target_length=8000)
     assert "length" in r.failed_gates
 
 
@@ -62,6 +62,6 @@ def test_critique_fails_on_pov_flip() -> None:
         + ("沈墨扑向林晚。" * 500)
         + "结局圆满收束。"
     )
-    r = critique(_body(text), hook="h", target_length=4000)
+    r = heuristic_critique(_body(text), hook="h", target_length=4000)
     # Heuristic: "我" appearing with POV-action verbs in a third-person body = POV flip.
     assert "pov" in r.failed_gates
