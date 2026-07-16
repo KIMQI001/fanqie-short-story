@@ -1,6 +1,7 @@
 """Tests for fanqie_short_story.daemon — macOS launchd integration."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -192,3 +193,75 @@ def test_status_returns_last_run_log_path(tmp_path: Path, monkeypatch) -> None:
     report = status()
     assert report.last_run_log is not None
     assert report.last_run_log.name == "daily-2026-07-16.log"
+
+
+def test_run_once_subprocess_returns_exit_code(monkeypatch) -> None:
+    """run_once() invokes the daily CLI in-process and returns its exit code."""
+    from fanqie_short_story.daemon import run_once
+    fake_cli = MagicMock()
+    fake_cli.side_effect = SystemExit(1)
+    monkeypatch.setattr("fanqie_short_story.daemon._cli_main", fake_cli)
+
+    rc = run_once(
+        config_path=Path("config/defaults.yaml"),
+        log_dir=Path("/tmp/logs"),
+        scorer_root="/tmp/scorer",
+    )
+    assert rc == 1
+    # It should pass standalone_mode=False + the 'daily run-once --config <path>' args via kwargs
+    args, kwargs = fake_cli.call_args
+    assert kwargs.get("args") == [
+        "daily", "run-once", "--config", str(Path("config/defaults.yaml")),
+    ]
+    assert kwargs.get("standalone_mode") is False
+
+
+def test_run_once_writes_log_file_under_log_dir(tmp_path: Path, monkeypatch) -> None:
+    """Spec §3.2: run_once() tees stdout/stderr to log_dir/daily-<date>.log.
+
+    The mock _cli_main writes a sentinel to sys.stdout; we assert the sentinel
+    lands in the log file. This catches regressions where redirect_stdout
+    fails to capture Click's echo() output (e.g., if a future change uses
+    `sys.__stdout__` directly or if Click caches output streams).
+    """
+    import sys
+    from datetime import date
+    from fanqie_short_story.daemon import run_once
+
+    def fake_cli_main(*, args, standalone_mode):
+        # Inside the redirected context, sys.stdout points at the log file.
+        sys.stdout.write("SENTINEL_FROM_CLI\n")
+        sys.stdout.flush()
+
+    monkeypatch.setattr("fanqie_short_story.daemon._cli_main", fake_cli_main)
+
+    rc = run_once(
+        config_path=Path("config/defaults.yaml"),
+        log_dir=tmp_path,
+        scorer_root="/tmp/scorer",
+    )
+    assert rc == 0
+    expected_log = tmp_path / f"daily-{date.today().isoformat()}.log"
+    assert expected_log.exists()
+    content = expected_log.read_text(encoding="utf-8")
+    assert "SENTINEL_FROM_CLI" in content
+
+
+def test_run_with_notification_loads_env_and_returns_rc(tmp_path: Path, monkeypatch) -> None:
+    """Loads MINIMAX_API_KEY from ENV_FILE if not in env; runs the in-process
+    scan (here mocked to return 0); fires osascript (mocked to no-op); returns 0."""
+    from fanqie_short_story.daemon import run_with_notification
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    fake_env = tmp_path / "env"
+    fake_env.write_text("MINIMAX_API_KEY=sk-from-disk\n", encoding="utf-8")
+    monkeypatch.setattr("fanqie_short_story.daemon.ENV_FILE", fake_env)
+    monkeypatch.setattr(
+        "fanqie_short_story.daemon._run_scan_in_process", lambda: 0,
+    )
+    monkeypatch.setattr(
+        "fanqie_short_story.daemon._fire_osascript", lambda *a, **kw: 0,
+    )
+    rc = run_with_notification()
+    assert rc == 0
+    assert os.environ.get("MINIMAX_API_KEY") == "sk-from-disk"

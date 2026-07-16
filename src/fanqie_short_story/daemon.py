@@ -113,11 +113,115 @@ def render_plist(
     )
 
 
-def run_with_notification() -> int:
-    """Placeholder — Chunk 3 replaces this body."""
-    raise NotImplementedError(
-        "run_with_notification is implemented in Chunk 3 (Task 12)"
+def _cli_main(*args, **kwargs):
+    """Local indirection so tests can monkeypatch without importing click."""
+    from fanqie_short_story.cli import main as _real_main
+    return _real_main(*args, **kwargs)
+
+
+def run_once(
+    *,
+    config_path: Path,
+    log_dir: Path,
+    scorer_root: str,
+) -> int:
+    """Subprocess invocation point for plist. Runs `fanqie-story daily run-once`,
+    pipes output to log_dir/daily-<date>.log, exits with the inner command's exit code.
+
+    File lock acquisition is handled inside `daily.run_daily()` (spec §3.5).
+
+    Note on append mode: the LOG file uses `"a"` (append), not `"w"` (overwrite).
+    The MANIFEST (`daily_manifest.json`) is overwritten by `write_daily_manifest`
+    because it's a structured snapshot of the latest run state. The LOG is a
+    chronological journal — appending preserves partial output from a crashed
+    run, lets a manual run and a launchd run co-exist in the same file, and
+    matches the standard convention for `daily-<date>.log` files.
+    """
+    # The daily CLI subcommand handles its own logging via Click; we just need
+    # to ensure the env has the right paths, open the per-day log file, and
+    # invoke the CLI in-process with stdout/stderr redirected to it.
+    if scorer_root:
+        os.environ.setdefault("FANQIE_SCORER_ROOT", scorer_root)
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"daily-{_date.today().isoformat()}.log"
+    cli_args = ["daily", "run-once", "--config", str(config_path)]
+    try:
+        with open(log_path, "a", encoding="utf-8") as logf:
+            with redirect_stdout(logf), redirect_stderr(logf):
+                _cli_main(args=cli_args, standalone_mode=False)
+        return 0
+    except SystemExit as exc:
+        return int(getattr(exc, "code", 0) or 0)
+
+
+def _run_scan_in_process() -> int:
+    """Invoke the daily run-once command in-process. Returns its exit code.
+
+    CRITICAL: Click groups with standalone_mode=False resolve no-args to
+    --help (exit 0) by default. We MUST pass args=['daily', 'run-once']
+    explicitly or launchd will print help every day at 06:00 and exit 0
+    with nothing to score.
+    """
+    return run_once(
+        config_path=Path("config/defaults.yaml"),
+        log_dir=LOG_DIR,
+        scorer_root=os.environ.get("FANQIE_SCORER_ROOT", ""),
     )
+
+
+def _fire_osascript(title: str, subtitle: str, message: str) -> int:
+    """osascript notification with argv-passed values (no string injection)."""
+    script = (
+        "on run {msg, ttl, sub}\n"
+        "display notification msg with title ttl subtitle sub\n"
+        "end run"
+    )
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", script, message, title, subtitle],
+            capture_output=True, check=False,
+        )
+        return out.returncode
+    except FileNotFoundError:
+        return 127
+
+
+def run_with_notification() -> int:
+    """Launchd entry point (called by `fanqie-story-run`).
+
+    Sequence (spec §3.2 + §5):
+      1. Load MINIMAX_API_KEY from ENV_FILE into os.environ if not already set.
+      2. Run the daily run-once command in-process.
+      3. If failed, write a one-line stderr summary BEFORE the osascript so
+         the launchd log has actionable info, not just "exit 1".
+      4. Fire osascript notification (always, even on failure).
+      5. Return the original exit code.
+    """
+    # 1. Load API key from disk if missing in this process's env.
+    if not (os.environ.get("MINIMAX_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
+        if ENV_FILE.exists():
+            for k, v in parse_env_file(ENV_FILE).items():
+                os.environ.setdefault(k, v)
+
+    # 2. Run.
+    rc = _run_scan_in_process()
+
+    # 3. Stderr on failure.
+    if rc != 0:
+        sys.stderr.write(f"daemon: daily run-once exited {rc}; see logs\n")
+
+    # 4. Build + fire notification (spec §5 osascript messages).
+    today = datetime.now().date().isoformat()
+    if rc == 0:
+        title = "番茄短篇完成"
+        message = f"{today}: 5 篇生成完"
+    else:
+        title = "番茄短篇失败"
+        message = f"{today}: exit {rc} · 见 ~/Library/Logs/fanqie-short-story/daily.err"
+    _fire_osascript(title, "", message)
+
+    return rc
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
