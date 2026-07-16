@@ -226,3 +226,90 @@ def install(
         ["launchctl", "load", "-w", str(PLIST_PATH)],
         check=True,
     )
+
+
+@dataclass
+class StatusReport:
+    """One-screen snapshot for `fanqie-story daemon status` (spec §3.2)."""
+    installed: bool        # plist file exists on disk
+    loaded: bool           # launchctl knows about LABEL
+    plist_path: Path       # where the plist lives (spec §3.2 status() contract)
+    schedule_time: str     # HH:MM, parsed from plist (or default)
+    env_key_present: bool  # env file exists & has non-empty MINIMAX_API_KEY
+    last_run_log: Path | None
+
+
+def uninstall() -> None:
+    """Tolerate 'service not loaded' from launchctl; always remove the plist.
+    Leaves ENV_FILE alone so re-install doesn't require a new key."""
+    try:
+        subprocess.run(
+            ["launchctl", "unload", str(PLIST_PATH)],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        pass
+    except FileNotFoundError:
+        pass  # launchctl not on PATH
+    if PLIST_PATH.exists():
+        PLIST_PATH.unlink()
+
+
+def _find_latest_log() -> Path | None:
+    """Newest file in LOG_DIR matching daily-*.log, or None."""
+    if not LOG_DIR.is_dir():
+        return None
+    candidates = sorted(LOG_DIR.glob("daily-*.log"))
+    return candidates[-1] if candidates else None
+
+
+def _read_schedule_time_from_plist() -> str:
+    """Best-effort parse of Hour/Minute from the plist. Returns '06:00' on miss."""
+    if not PLIST_PATH.exists():
+        return "06:00"
+    text = PLIST_PATH.read_text(encoding="utf-8")
+    import re as _re
+    hour_m = _re.search(r"<key>Hour</key>\s*<integer>(\d+)</integer>", text)
+    minute_m = _re.search(r"<key>Minute</key>\s*<integer>(\d+)</integer>", text)
+    if hour_m and minute_m:
+        return f"{int(hour_m.group(1)):02d}:{int(minute_m.group(1)):02d}"
+    return "06:00"
+
+
+def status() -> StatusReport:
+    """Snapshot the daemon state for `daemon status` (spec §3.2).
+
+    Tolerates missing plist / env file / LOG_DIR — the report is informative
+    even on a fresh install. Public signature is parameterless; tests reach
+    in via monkeypatch on the module-level constants.
+    """
+    installed = PLIST_PATH.exists()
+
+    loaded = False
+    try:
+        out = subprocess.run(
+            ["launchctl", "list", LABEL],
+            capture_output=True, check=False,
+        )
+        loaded = out.returncode == 0
+    except FileNotFoundError:
+        loaded = False
+
+    schedule_time = _read_schedule_time_from_plist()
+
+    env_key_present = False
+    if ENV_FILE.exists():
+        try:
+            env = parse_env_file(ENV_FILE)
+            env_key_present = bool(env.get("MINIMAX_API_KEY", "").strip())
+        except OSError:
+            env_key_present = False
+
+    return StatusReport(
+        installed=installed,
+        loaded=loaded,
+        plist_path=PLIST_PATH,
+        schedule_time=schedule_time,
+        env_key_present=env_key_present,
+        last_run_log=_find_latest_log(),
+    )

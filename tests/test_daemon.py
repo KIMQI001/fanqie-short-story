@@ -137,3 +137,58 @@ def test_install_writes_plist_to_launch_agents(tmp_path: Path, monkeypatch) -> N
     fake_run.assert_called_once()
     called_argv = fake_run.call_args.args[0]
     assert called_argv == ["launchctl", "load", "-w", str(fake_plist)]
+
+
+def test_uninstall_unloads_and_removes_plist(tmp_path: Path, monkeypatch) -> None:
+    """uninstall() calls launchctl unload + removes the plist file."""
+    from fanqie_short_story.daemon import uninstall
+    fake_plist = tmp_path / "LaunchAgents" / "com.troah.fanqie-short-story.daily.plist"
+    fake_plist.parent.mkdir(parents=True)
+    fake_plist.write_text("<?xml ...?>", encoding="utf-8")
+    monkeypatch.setattr("fanqie_short_story.daemon.PLIST_PATH", fake_plist)
+    subprocess_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "fanqie_short_story.daemon.subprocess.run",
+        lambda args, **kw: subprocess_calls.append(args),
+    )
+
+    uninstall()
+
+    assert not fake_plist.exists()
+    assert any("unload" in str(c) for c in subprocess_calls)
+
+
+def test_status_returns_installed_false_when_no_plist(tmp_path: Path, monkeypatch) -> None:
+    """Fresh state (no plist, no env, no DB) → installed=False, env_key_present=False."""
+    from fanqie_short_story.daemon import status
+    monkeypatch.setattr("fanqie_short_story.daemon.PLIST_PATH", tmp_path / "nope.plist")
+    monkeypatch.setattr("fanqie_short_story.daemon.ENV_FILE", tmp_path / "nope-env")
+    monkeypatch.setattr(
+        "fanqie_short_story.daemon.subprocess.run",
+        lambda *a, **kw: type("R", (), {"returncode": 1, "stderr": b"", "stdout": b""})(),
+    )
+    report = status()
+    assert report.installed is False
+    assert report.loaded is False
+    assert report.env_key_present is False
+    # Spec §3.2 contract: status() always reports the plist_path (even when not installed)
+    assert report.plist_path == tmp_path / "nope.plist"
+
+
+def test_status_returns_last_run_log_path(tmp_path: Path, monkeypatch) -> None:
+    """When log_dir has files, status reports the newest log path."""
+    from fanqie_short_story.daemon import status
+    fake_log = tmp_path / "Logs"
+    fake_log.mkdir(parents=True)
+    (fake_log / "daily-2026-07-15.log").write_text("old", encoding="utf-8")
+    (fake_log / "daily-2026-07-16.log").write_text("new", encoding="utf-8")
+    monkeypatch.setattr("fanqie_short_story.daemon.LOG_DIR", fake_log)
+    monkeypatch.setattr("fanqie_short_story.daemon.PLIST_PATH", tmp_path / "nope.plist")
+    monkeypatch.setattr("fanqie_short_story.daemon.ENV_FILE", tmp_path / "nope-env")
+    monkeypatch.setattr(
+        "fanqie_short_story.daemon.subprocess.run",
+        lambda *a, **kw: type("R", (), {"returncode": 1, "stderr": b"", "stdout": b""})(),
+    )
+    report = status()
+    assert report.last_run_log is not None
+    assert report.last_run_log.name == "daily-2026-07-16.log"
