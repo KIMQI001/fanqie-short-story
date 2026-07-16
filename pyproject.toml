@@ -30,6 +30,9 @@ fanqie-story-run = "fanqie_short_story.daemon:run_with_notification"
 where = ["src"]
 
 [tool.pytest.ini_options]
+# e2e tests hit the real LLM API (cost + latency); skip them by default.
+# Override with `-m e2e` on the command line to run them explicitly.
+addopts = "-m 'not e2e'"
 markers = [
     "e2e: end-to-end tests that hit real LLM API",
 ]
