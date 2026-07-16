@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import csv
 import os
+import sqlite3
 import time
 from pathlib import Path
 
 import pytest
 
-from fanqie_short_story.daily import find_latest_scores_csv
+from fanqie_short_story.daily import (
+    DailyRunError,
+    _lookup_synopses,
+    find_latest_scores_csv,
+    load_top_n,
+)
 
 
 def test_find_latest_scores_csv_returns_newest(tmp_path: Path) -> None:
@@ -34,13 +40,6 @@ def test_find_latest_scores_csv_raises_when_none(tmp_path: Path) -> None:
     """No scores.csv under scorer_root → FileNotFoundError."""
     with pytest.raises(FileNotFoundError, match="scores.csv"):
         find_latest_scores_csv(tmp_path)
-
-
-import sqlite3
-
-from fanqie_short_story.daily import (
-    find_latest_scores_csv, load_top_n,  # add load_top_n to existing import
-)
 
 
 CSV_HEADER = "rank,book_id,title,author,genre,chapters_count,in_read,overall,dim_hook,dim_plot,rationale\n"
@@ -129,3 +128,45 @@ def test_load_top_n_looks_up_synopses_in_sqlite(tmp_path: Path) -> None:
     assert result[0].synopsis == "synopsis of book 1"   # recovered from SQLite
     assert result[1].synopsis == "title2"                # NULL → soft fallback
     assert result[2].synopsis == "title3"                # row missing → soft fallback
+
+
+# --------------------------------------------------------------------------
+# Tests for _lookup_synopses — Task 5 / v0.3.0
+# --------------------------------------------------------------------------
+
+def test_lookup_synopses_raises_on_missing_db(tmp_path: Path) -> None:
+    """Hard fail: no fanqie.db at all → DailyRunError mentioning the path."""
+    with pytest.raises(DailyRunError, match="file missing"):
+        _lookup_synopses(tmp_path, ["any"])
+
+
+def test_lookup_synopses_raises_on_missing_books_table(tmp_path: Path) -> None:
+    """Hard fail: DB exists but no `books` table → DailyRunError."""
+    db = tmp_path / "output" / "fanqie.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db_path = db
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("CREATE TABLE other (x INT)")
+    with pytest.raises(DailyRunError, match="missing 'books' table"):
+        _lookup_synopses(tmp_path, ["any"])
+
+
+def test_lookup_synopses_raises_on_missing_synopsis_column(tmp_path: Path) -> None:
+    """Hard fail: books table exists but no `synopsis` column → DailyRunError."""
+    _create_topic_scorer_db(tmp_path, with_synopsis_col=False)
+    with pytest.raises(DailyRunError, match="missing 'books.synopsis' column"):
+        _lookup_synopses(tmp_path, ["id1"])
+
+
+def test_lookup_synopses_returns_empty_for_missing_rows(tmp_path: Path) -> None:
+    """Soft fallback: books table exists, book_id absent → no entry, no error."""
+    _create_topic_scorer_db(tmp_path, with_synopsis_col=True)
+    result = _lookup_synopses(tmp_path, ["not-in-db"])
+    assert result == {}
+
+
+def test_lookup_synopses_skips_null_synopsis(tmp_path: Path) -> None:
+    """Soft fallback: book_id present but synopsis IS NULL → no entry."""
+    _create_topic_scorer_db(tmp_path, with_synopsis_col=True)
+    result = _lookup_synopses(tmp_path, ["id1", "id2"])
+    assert result == {"id1": "synopsis of book 1"}  # id2's NULL dropped
