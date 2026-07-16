@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.3.0] - 2026-07-16
+
+### Added
+- `fanqie-story daily run-once` — runs 5 stories/day from latest `fanqie-topic-scorer` scores.csv, with cover generation and substitute fallback (7-deep pool)
+- `fanqie-story daemon {install,uninstall,status,run-once}` — manages a macOS launchd plist that runs the daily job at 06:00 local
+- `daily_manifest.json` per-day audit trail (date, source_csv, generated, failures, totals)
+- File lock at `~/.local/share/fanqie-short-story/daily.lock` (5-min timeout) — serializes concurrent scheduled + manual runs
+- One new dependency: `filelock` (MIT, pure-Python)
+- 1 new e2e test: `tests/e2e/test_daily_run_once.py` (gated by `-m e2e`; e2e tests are deselected by default via `pyproject.toml` `addopts`)
+
+### Changed
+- `__version__` → `0.3.0`
+- `pyproject.toml` version → `0.3.0`; new console script `fanqie-story-run`
+- `pyproject.toml` `[tool.pytest.ini_options]` adds `addopts = "-m 'not e2e'"` so bare `pytest` skips the e2e suite by default
+
 ## [v0.2.0] - 2026-07-16
 
 ### Added
