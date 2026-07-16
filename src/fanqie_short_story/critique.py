@@ -30,7 +30,7 @@ _ENDING_FAIL_SIGNALS = (
 )
 
 
-def critique(
+def heuristic_critique(
     body: Body,
     hook: str,
     target_length: int,

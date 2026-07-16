@@ -8,7 +8,7 @@ from pathlib import Path
 from fanqie_short_story.body import Body, generate_body
 from fanqie_short_story.config import Config
 from fanqie_short_story.cover import generate_cover
-from fanqie_short_story.critique import critique
+from fanqie_short_story.critique import heuristic_critique
 from fanqie_short_story.manifest import StoryManifest, write_manifest
 from fanqie_short_story.outline import generate_outline
 from fanqie_short_story.synopsis import generate_synopsis
@@ -72,7 +72,7 @@ def generate_story(
             critique_feedback=feedback, config=config,
         )
         iterations += 1
-        report = critique(
+        report = heuristic_critique(
             body, hook, target_length,
             length_tolerance=config.critique.get("length_tolerance", 0.20),
         )
