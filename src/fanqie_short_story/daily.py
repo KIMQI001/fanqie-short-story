@@ -214,6 +214,8 @@ def _run_daily_unlocked(
             date=datetime.now().date().isoformat(), source_csv=csv_path,
         )
 
+    started_at = time.monotonic()
+
     priority = books[:top_n]
     extras = books[top_n:]
     rng = Random(shuffle_seed) if shuffle_seed is not None else Random()
@@ -257,6 +259,14 @@ def _run_daily_unlocked(
                 "reason": type(e).__name__ + ": " + str(e),
                 "traceback_excerpt": traceback.format_exc(limit=3),
             })
+    elapsed = int(time.monotonic() - started_at)
+    write_daily_manifest(
+        output_root / today,
+        result,
+        top_n_requested=top_n,
+        substitute_pool_size=max_substitute_depth,
+        duration_seconds=elapsed,
+    )
     return result
 
 
@@ -296,3 +306,87 @@ def _stamp_daily_meta(story_dir: Path, book: RankedBook) -> None:
     data["daily_author"] = book.author
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+_WEEK_RE = re.compile(r"(\d{4}-W\d{2})")
+
+
+def write_daily_manifest(
+    output_dir: Path,
+    result: DailyRunResult,
+    *,
+    top_n_requested: int = 5,
+    substitute_pool_size: int = 7,
+    duration_seconds: int = 0,
+) -> Path:
+    """Write output_dir/daily_manifest.json. Returns the manifest path.
+
+    Schema (spec §6):
+      - date, source_csv, source_csv_mtime, source_csv_week, scorer_root
+      - top_n_requested, substitute_pool_size
+      - generated: list of {rank, title, author, slug, story_dir,
+                            manifest_path, critique_strategy,
+                            accepted_after_critic_cap, llm_calls, char_count}
+      - failures: list of {rank, title, reason, traceback_excerpt}
+      - totals: {succeeded, failed, api_calls, duration_seconds}
+
+    `top_n_requested`, `substitute_pool_size`, and `duration_seconds` are
+    passed in by `_run_daily_unlocked` (which knows the actual values used).
+    The defaults (5 / 7 / 0) keep the function independently callable for
+    tests and one-off manual manifest regeneration.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mtime = datetime.fromtimestamp(result.source_csv.stat().st_mtime, tz=timezone.utc)
+    week_match = _WEEK_RE.search(result.source_csv.parent.name)
+    week = week_match.group(1) if week_match else "unknown"
+
+    generated_entries = []
+    for path in result.generated:
+        manifest_path = path / "manifest.json"
+        meta = _read_story_manifest_meta(manifest_path)
+        generated_entries.append({
+            "rank": meta.get("daily_rank"),
+            "title": meta.get("daily_title"),
+            "author": meta.get("daily_author"),
+            "slug": path.name,
+            "story_dir": str(path),
+            "manifest_path": str(manifest_path),
+            "critique_strategy": meta.get("critique_strategy", "unknown"),
+            "accepted_after_critic_cap": meta.get("accepted_after_critic_cap", False),
+            "llm_calls": meta.get("llm_calls", 0),
+            "char_count": meta.get("actual_length", 0),
+        })
+
+    payload = {
+        "date": result.date,
+        "source_csv": str(result.source_csv),
+        "source_csv_mtime": mtime.isoformat(),
+        "source_csv_week": week,
+        "scorer_root": str(result.source_csv.parent.parent.parent),
+        "top_n_requested": top_n_requested,
+        "substitute_pool_size": substitute_pool_size,
+        "generated": generated_entries,
+        "failures": result.failures,
+        "totals": {
+            "succeeded": len(result.generated),
+            "failed": len(result.failures),
+            "api_calls": result.api_calls,
+            "duration_seconds": duration_seconds,
+        },
+    }
+    out_path = output_dir / "daily_manifest.json"
+    out_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    return out_path
+
+
+def _read_story_manifest_meta(manifest_path: Path) -> dict:
+    """Read a story's manifest.json and return a flat dict. Empty on miss."""
+    if not manifest_path.exists():
+        return {}
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}

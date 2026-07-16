@@ -23,6 +23,7 @@ from fanqie_short_story.daily import (
     find_latest_scores_csv,
     load_top_n,
     run_daily,
+    write_daily_manifest,
 )
 import fanqie_short_story.daily as daily_mod
 from fanqie_short_story.pipeline import GenerationFailed
@@ -433,3 +434,75 @@ def test_run_daily_records_api_calls_total(tmp_path: Path) -> None:
 
     assert len(result.generated) == 5
     assert result.api_calls == sum(7 + i for i in range(5))  # 7+8+9+10+11 = 45
+
+
+# --------------------------------------------------------------------------
+# Tests for write_daily_manifest — Task 8 / v0.3.0
+# --------------------------------------------------------------------------
+
+
+def test_write_daily_manifest_json_schema(tmp_path: Path) -> None:
+    """Round-trip: write manifest, load JSON, validate required fields."""
+    csv_path = tmp_path / "scores.csv"
+    csv_path.write_text("rank,book_id\n", encoding="utf-8")
+    result = DailyRunResult(
+        date="2026-07-16",
+        source_csv=csv_path,
+        generated=[Path("output/stories/凡骨-壹")],
+        failures=[{"rank": 7, "title": "x", "reason": "fail", "traceback_excerpt": None}],
+        api_calls=27,
+    )
+    out_dir = tmp_path / "manifests"
+    out_dir.mkdir()
+    manifest_path = write_daily_manifest(out_dir, result)
+    assert manifest_path == out_dir / "daily_manifest.json"
+
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert data["date"] == "2026-07-16"
+    assert data["source_csv"] == str(csv_path)
+    assert data["top_n_requested"] == 5
+    assert data["substitute_pool_size"] == 7
+    assert len(data["generated"]) == 1
+    assert data["generated"][0]["rank"] is None or "rank" in data["generated"][0]
+    assert data["failures"] == result.failures
+    assert data["totals"]["api_calls"] == 27
+
+
+def test_write_daily_manifest_includes_source_csv_week(tmp_path: Path) -> None:
+    """source_csv_week extracted from parent dir name (e.g., 2026-W29)."""
+    csv_dir = tmp_path / "output" / "runs" / "2026-W29"
+    csv_dir.mkdir(parents=True)
+    csv_path = csv_dir / "scores.csv"
+    csv_path.write_text("rank,book_id\n", encoding="utf-8")
+    result = DailyRunResult(
+        date="2026-07-16",
+        source_csv=csv_path,
+        generated=[],
+        failures=[],
+        api_calls=0,
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    manifest_path = write_daily_manifest(out_dir, result)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert data["source_csv_week"] == "2026-W29"
+
+
+def test_write_daily_manifest_source_csv_week_fallback(tmp_path: Path) -> None:
+    """No week pattern in parent dir name → 'unknown'."""
+    csv_dir = tmp_path / "random" / "path"
+    csv_dir.mkdir(parents=True)
+    csv_path = csv_dir / "scores.csv"
+    csv_path.write_text("rank,book_id\n", encoding="utf-8")
+    result = DailyRunResult(
+        date="2026-07-16",
+        source_csv=csv_path,
+        generated=[],
+        failures=[],
+        api_calls=0,
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    manifest_path = write_daily_manifest(out_dir, result)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert data["source_csv_week"] == "unknown"
