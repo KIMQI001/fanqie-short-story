@@ -22,6 +22,17 @@ def _outline() -> Outline:
     )
 
 
+def _llm_critique_pass():
+    """Return an llm_critique side_effect that always PASSes (no network)."""
+    from fanqie_short_story.llm_critique import LLMCritiqueReport
+
+    def _fake(*a, **kw):
+        return LLMCritiqueReport(
+            passed=True, notes="", mentioned_aspects=[], raw_response="VERDICT: PASS",
+        )
+    return _fake
+
+
 def test_generate_story_writes_all_outputs(tmp_path: Path, fake_config) -> None:
     def fake_outline(*args, **kw):
         return _outline()
@@ -43,6 +54,7 @@ def test_generate_story_writes_all_outputs(tmp_path: Path, fake_config) -> None:
         return "minimax"
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", side_effect=fake_titles), \
          patch("fanqie_short_story.pipeline.generate_synopsis", side_effect=fake_synopsis), \
          patch("fanqie_short_story.pipeline.generate_cover", side_effect=fake_cover):
@@ -78,6 +90,7 @@ def test_generate_story_retries_on_critique_fail(tmp_path: Path, fake_config) ->
         return Body.from_text(text)
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -118,6 +131,7 @@ def test_generate_story_continues_when_cover_fails(tmp_path: Path, fake_config) 
         return Body.from_text(text)
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover",
@@ -130,3 +144,168 @@ def test_generate_story_continues_when_cover_fails(tmp_path: Path, fake_config) 
     assert (out / "manifest.json").exists()
     data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert data["cover_backend"] is None
+
+
+# === v0.2.0 additions ===
+
+def test_pipeline_runs_llm_critic_after_heuristic_pass(tmp_path, fake_config) -> None:
+    """Heuristic PASS + LLM critic PASS → done in 1 attempt."""
+    fake_config.critique["llm_enabled"] = True
+    fake_config.critique["llm_max_calls_per_story"] = 3
+
+    def fake_outline(*a, **kw): return _outline()
+    def fake_body(*a, **kw):
+        text = ("第一章 重生\n\n刀光剑影之间，林晚撞见了沈墨，她必须先发制人。" * 50
+                + "真相大白，归隐山林。")
+        return Body.from_text(text)
+    def fake_heuristic(*a, **kw):
+        from fanqie_short_story.critique import CritiqueReport
+        return CritiqueReport(passed=True, notes=[], failed_gates=[])
+    def fake_llm_critique(*a, **kw):
+        from fanqie_short_story.llm_critique import LLMCritiqueReport
+        return LLMCritiqueReport(passed=True, notes="", mentioned_aspects=[], raw_response="VERDICT: PASS")
+
+    with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
+         patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic) as mock_h, \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=fake_llm_critique) as mock_llm, \
+         patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
+         patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
+         patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
+        out = generate_story(
+            hook="h", genre="chuanqi", target_length=1400,
+            output_dir=tmp_path, config=fake_config,
+        )
+    assert mock_h.call_count == 1
+    assert mock_llm.call_count == 1
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert data["critique_strategy"] == "heuristic_then_llm"
+    assert data["llm_critic_attempts"] == 1
+    assert data["accepted_after_critic_cap"] is False
+
+
+def test_pipeline_retries_when_llm_critic_fails(tmp_path, fake_config) -> None:
+    """Heuristic PASS + LLM critic FAIL → retry with [critic notes]."""
+    fake_config.critique["llm_enabled"] = True
+    fake_config.critique["llm_max_calls_per_story"] = 3
+
+    def fake_outline(*a, **kw): return _outline()
+    def fake_body(*a, **kw):
+        text = ("第一章 重生\n\n刀光剑影之间，林晚撞见了沈墨，她必须先发制人。" * 50
+                + "真相大白，归隐山林。")
+        return Body.from_text(text)
+    def fake_heuristic(*a, **kw):
+        from fanqie_short_story.critique import CritiqueReport
+        return CritiqueReport(passed=True, notes=[], failed_gates=[])
+    call_count = {"llm": 0}
+    def fake_llm_critique(*a, **kw):
+        from fanqie_short_story.llm_critique import LLMCritiqueReport
+        call_count["llm"] += 1
+        if call_count["llm"] == 1:
+            return LLMCritiqueReport(passed=False, notes="情节拖沓",
+                                      mentioned_aspects=["情节"], raw_response="VERDICT: FAIL")
+        return LLMCritiqueReport(passed=True, notes="", mentioned_aspects=[],
+                                  raw_response="VERDICT: PASS")
+
+    with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
+         patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=fake_llm_critique), \
+         patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
+         patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
+         patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
+        out = generate_story(
+            hook="h", genre="chuanqi", target_length=1400,
+            output_dir=tmp_path, config=fake_config,
+        )
+    assert call_count["llm"] == 2  # retried once
+    assert (out / "body.txt").exists()
+
+
+def test_pipeline_skips_llm_critic_when_heuristic_fails(tmp_path, fake_config) -> None:
+    """Heuristic always fails → LLM critic never runs."""
+    fake_config.critique["llm_enabled"] = True
+
+    def fake_outline(*a, **kw): return _outline()
+    def always_bad_body(*a, **kw):
+        return Body.from_text("未完待续" + ("x" * 10))
+    def fail_heuristic(*a, **kw):
+        from fanqie_short_story.critique import CritiqueReport
+        return CritiqueReport(passed=False, notes=["钩子太弱"], failed_gates=["hook"])
+
+    with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
+         patch("fanqie_short_story.pipeline.generate_body", side_effect=always_bad_body), \
+         patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fail_heuristic), \
+         patch("fanqie_short_story.pipeline.llm_critique") as mock_llm, \
+         patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
+         patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
+         patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
+        with pytest.raises(GenerationFailed):
+            generate_story(
+                hook="h", genre="chuanqi", target_length=1000,
+                output_dir=tmp_path, config=fake_config,
+            )
+    assert mock_llm.call_count == 0
+
+
+def test_pipeline_caps_llm_critic_calls(tmp_path, fake_config) -> None:
+    """Heuristic always PASS + LLM critic always FAIL → cap accepts body."""
+    fake_config.critique["llm_enabled"] = True
+    fake_config.critique["llm_max_calls_per_story"] = 2
+
+    def fake_outline(*a, **kw): return _outline()
+    def fake_body(*a, **kw):
+        text = ("第一章 重生\n\n刀光剑影之间，林晚撞见了沈墨，她必须先发制人。" * 50
+                + "真相大白，归隐山林。")
+        return Body.from_text(text)
+    def fake_heuristic(*a, **kw):
+        from fanqie_short_story.critique import CritiqueReport
+        return CritiqueReport(passed=True, notes=[], failed_gates=[])
+    def always_fail_llm_critique(*a, **kw):
+        from fanqie_short_story.llm_critique import LLMCritiqueReport
+        return LLMCritiqueReport(passed=False, notes="情节差",
+                                  mentioned_aspects=["情节"], raw_response="VERDICT: FAIL")
+
+    with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
+         patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
+         patch("fanqie_short_story.pipeline.llm_critique", side_effect=always_fail_llm_critique), \
+         patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
+         patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
+         patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
+        out = generate_story(
+            hook="h", genre="chuanqi", target_length=1400,
+            output_dir=tmp_path, config=fake_config,
+        )
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert data["accepted_after_critic_cap"] is True
+    assert data["llm_critic_attempts"] == 2
+
+
+def test_pipeline_records_critique_strategy_in_manifest(tmp_path, fake_config) -> None:
+    """critique_strategy follows config.critique.llm_enabled."""
+    fake_config.critique["llm_enabled"] = False  # kill switch
+
+    def fake_outline(*a, **kw): return _outline()
+    def fake_body(*a, **kw):
+        text = ("第一章 重生\n\n刀光剑影之间，林晚撞见了沈墨，她必须先发制人。" * 50
+                + "真相大白，归隐山林。")
+        return Body.from_text(text)
+    def fake_heuristic(*a, **kw):
+        from fanqie_short_story.critique import CritiqueReport
+        return CritiqueReport(passed=True, notes=[], failed_gates=[])
+
+    with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
+         patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
+         patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
+         patch("fanqie_short_story.pipeline.llm_critique") as mock_llm, \
+         patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
+         patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
+         patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
+        out = generate_story(
+            hook="h", genre="chuanqi", target_length=1400,
+            output_dir=tmp_path, config=fake_config,
+        )
+    data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert data["critique_strategy"] == "heuristic_only"
+    assert mock_llm.call_count == 0

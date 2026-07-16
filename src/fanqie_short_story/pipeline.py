@@ -9,6 +9,7 @@ from fanqie_short_story.body import Body, generate_body
 from fanqie_short_story.config import Config
 from fanqie_short_story.cover import generate_cover
 from fanqie_short_story.critique import heuristic_critique
+from fanqie_short_story.llm_critique import llm_critique
 from fanqie_short_story.manifest import StoryManifest, write_manifest
 from fanqie_short_story.outline import generate_outline
 from fanqie_short_story.synopsis import generate_synopsis
@@ -60,36 +61,74 @@ def generate_story(
         outline.to_prompt_string(), encoding="utf-8",
     )
 
-    # 2. Body — with critique-and-retry loop
-    max_retries = config.max_retries
+    # 2. Body — heuristic → LLM critic chain with retry loop
     body: Body | None = None
     feedback: list[str] | None = None
     iterations = 0
+
+    # Counters used both for loop bookkeeping and the success-path manifest.
+    heuristic_attempts = 0
+    llm_critic_attempts = 0
+    accepted_after_critic_cap = False
+    critique_strategy = "heuristic_only"   # upgraded to "heuristic_then_llm" if the LLM critic runs
+    critique_notes: list[str] = []
+
+    # NOTE: max_retries stays at top-level config (v0.1.0 contract — NOT under critique:).
+    max_retries = config.max_retries
+    max_llm_calls = config.critique.get("llm_max_calls_per_story", 3)
+    llm_enabled = config.critique.get("llm_enabled", True)
+
     while iterations <= max_retries:
+        iterations += 1   # count each body generation attempt (preserves v0.1.0 semantics)
         body = generate_body(
             outline, hook, genre, target_length,
             tone=tone or "sweet_with_suspense",
             critique_feedback=feedback, config=config,
         )
-        iterations += 1
-        report = heuristic_critique(
+
+        h_report = heuristic_critique(
             body, hook, target_length,
             length_tolerance=config.critique.get("length_tolerance", 0.20),
         )
-        if report.passed:
+        heuristic_attempts += 1
+        if not h_report.passed:
+            feedback = h_report.notes
+            critique_notes.append(f"[heuristic] {'; '.join(h_report.notes)}")
+            continue
+
+        if not llm_enabled:
+            # heuristic-only mode (v0.1.0 behavior with kill switch)
+            critique_strategy = "heuristic_only"
             break
-        feedback = report.notes
+
+        if llm_critic_attempts >= max_llm_calls:
+            # Cap reached BEFORE another call — accept body with the latest critic's failure.
+            print("warning: LLM critic cap reached; accepting body")
+            accepted_after_critic_cap = True
+            critique_strategy = "heuristic_then_llm"
+            break
+
+        llm_report = llm_critique(
+            body, hook, genre, target_length, config=config,
+        )
+        llm_critic_attempts += 1
+        if llm_report.passed:
+            critique_strategy = "heuristic_then_llm"
+            break
+
+        feedback = [llm_report.notes]   # WRAP: body expects list[str]
+        critique_notes.append(f"[llm_critic] {llm_report.notes}")
     else:
-        # Loop exited without `break`: critique kept failing.
+        # Loop exhausted without break. Preserve v0.1.0's _failed/ artifact writes for audit.
         failed_dir = story_dir / "_failed"
         failed_dir.mkdir(exist_ok=True)
         if body is not None:
             (failed_dir / "body.txt").write_text(body.text, encoding="utf-8")
         (failed_dir / "critique.txt").write_text(
-            "\n".join(report.notes), encoding="utf-8",
+            "\n".join(critique_notes), encoding="utf-8",
         )
         raise GenerationFailed(
-            f"critique failed after {iterations} attempts: {report.failed_gates}",
+            f"critique loop exhausted after {iterations} attempts",
             story_dir,
         )
 
@@ -134,7 +173,11 @@ def generate_story(
         model=config.model,
         created_at=datetime.now(timezone.utc),
         critique_iterations=iterations,
-        critique_notes=report.notes,
+        critique_notes=critique_notes,  # v0.2.0: accumulated per-stage critique notes
+        critique_strategy=critique_strategy,
+        heuristic_attempts=heuristic_attempts,
+        llm_critic_attempts=llm_critic_attempts,
+        accepted_after_critic_cap=accepted_after_critic_cap,
         cover_backend=cover_backend_used,
         llm_calls=1 + iterations + 1 + 1,  # outline + body attempts + title + synopsis
         estimated_tokens=0,  # tracked separately in future
