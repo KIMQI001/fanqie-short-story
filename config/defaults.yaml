@@ -31,3 +31,14 @@ genre_mapping:
   xianyan-rich: xianyan
   chuanyue-rich: chuanqi
   yanqing: chuanqi
+
+# v0.3.0 additions:
+daily:
+  enabled: true                  # master kill switch for daily automation
+  top_n: 5                       # stories per day
+  max_substitute_depth: 7        # pool depth beyond top_n for fallback
+  schedule_time: "06:00"         # local time, launchd StartCalendarInterval
+  notify: true                   # osascript popup on completion
+  scorer_root: null              # null = default ~/CascadeProjects/projects/fanqie-topic-scorer
+  output_root: "output/daily"
+  log_dir: "logs/daily"
