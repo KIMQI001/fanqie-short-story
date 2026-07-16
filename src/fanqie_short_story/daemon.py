@@ -111,3 +111,10 @@ def render_plist(
         fanqie_story_root=str(fanqie_story_root),
         daemon_env_var=daemon_env_var,
     )
+
+
+def run_with_notification() -> int:
+    """Placeholder — Chunk 3 replaces this body."""
+    raise NotImplementedError(
+        "run_with_notification is implemented in Chunk 3 (Task 12)"
+    )
