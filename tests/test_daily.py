@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from filelock import FileLock
 
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +24,7 @@ from fanqie_short_story.daily import (
     load_top_n,
     run_daily,
 )
+import fanqie_short_story.daily as daily_mod
 from fanqie_short_story.pipeline import GenerationFailed
 
 
@@ -349,3 +353,83 @@ def test_run_daily_handles_no_scores_csv(tmp_path: Path) -> None:
             top_n=5,
             max_substitute_depth=7,
         )
+
+
+# --------------------------------------------------------------------------
+# Tests for run_daily file lock + api_calls total — Task 7 / v0.3.0
+# --------------------------------------------------------------------------
+
+
+def test_run_daily_acquires_and_releases_lock(tmp_path: Path) -> None:
+    """Happy path: lock acquired at start, released at end (file empty after)."""
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with patch("fanqie_short_story.daily.generate_story") as mock_gen:
+        mock_gen.return_value = Path("output/stories/x")
+        run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=tmp_path / "out",
+            top_n=5,
+            max_substitute_depth=0,
+        )
+
+    # The lock should be released — a second acquisition should succeed immediately
+    lock2 = FileLock(LOCK_PATH, timeout=1)
+    with lock2:
+        pass  # would have raised Timeout if the first lock was still held
+
+
+def test_run_daily_raises_dailyrunerror_on_lock_timeout(tmp_path: Path, monkeypatch) -> None:
+    """Pre-acquire lock from outside; run with tiny timeout → DailyRunError mentioning LOCK_PATH."""
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    blocker = FileLock(LOCK_PATH, timeout=1)
+    blocker.acquire()
+    try:
+        monkeypatch.setattr(daily_mod, "LOCK_TIMEOUT_SECONDS", 1)
+        with pytest.raises(DailyRunError, match=str(LOCK_PATH)):
+            run_daily(
+                config=_make_config(tmp_path),
+                scorer_root=tmp_path / "scorer",
+                output_root=tmp_path / "out",
+                top_n=5,
+                max_substitute_depth=0,
+            )
+    finally:
+        blocker.release()
+
+
+def test_run_daily_records_api_calls_total(tmp_path: Path) -> None:
+    """Spec §8 item 16: result.api_calls sums the per-story llm_calls across
+    all 5 generated stories. Build fake story manifest.json files and verify
+    the sum is computed from disk (via _read_manifest_llm_calls)."""
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+    today = datetime.now().date().isoformat()
+    stories_dir = out_root / today / "stories"
+    stories_dir.mkdir(parents=True)
+    fake_paths = []
+    for i in range(5):
+        slug_dir = stories_dir / f"slug-{i}"
+        slug_dir.mkdir()
+        (slug_dir / "manifest.json").write_text(
+            json.dumps({"llm_calls": 7 + i}), encoding="utf-8",
+        )
+        fake_paths.append(slug_dir)
+
+    with patch(
+        "fanqie_short_story.daily.generate_story", side_effect=fake_paths,
+    ):
+        result = run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=0,
+        )
+
+    assert len(result.generated) == 5
+    assert result.api_calls == sum(7 + i for i in range(5))  # 7+8+9+10+11 = 45
