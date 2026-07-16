@@ -160,3 +160,139 @@ def _lookup_synopses(scorer_root: Path, book_ids: list[str]) -> dict[str, str]:
                 f"docs/superpowers/specs/2026-07-14-fanqie-topic-scorer-design.md"
             ) from e
         raise
+
+
+def run_daily(
+    *,
+    config: Config,
+    scorer_root: Path,
+    output_root: Path,
+    top_n: int = 5,
+    max_substitute_depth: int = 7,
+    shuffle_seed: int | None = None,
+) -> DailyRunResult:
+    """Top-level orchestrator. Acquires the file lock, picks latest CSV,
+    loads top_n+max_substitute_depth books, shuffles priority order, generates
+    up to top_n stories with substitute fallback, returns DailyRunResult.
+
+    NOT a CLI entry — see cli.py for that. DailyRunError propagates from
+    _lookup_synopses (schema drift); FileNotFoundError from find_latest_scores_csv.
+    """
+    lock = FileLock(LOCK_PATH, timeout=LOCK_TIMEOUT_SECONDS)
+    try:
+        with lock:
+            return _run_daily_unlocked(
+                config=config,
+                scorer_root=scorer_root,
+                output_root=output_root,
+                top_n=top_n,
+                max_substitute_depth=max_substitute_depth,
+                shuffle_seed=shuffle_seed,
+            )
+    except Timeout as e:
+        raise DailyRunError(
+            f"another daily run is in flight (lock held >{LOCK_TIMEOUT_SECONDS}s); "
+            f"refusing to run concurrently. If you believe this is stale, "
+            f"check {LOCK_PATH} and remove it manually."
+        ) from e
+
+
+def _run_daily_unlocked(
+    *,
+    config: Config,
+    scorer_root: Path,
+    output_root: Path,
+    top_n: int,
+    max_substitute_depth: int,
+    shuffle_seed: int | None,
+) -> DailyRunResult:
+    csv_path = find_latest_scores_csv(scorer_root)
+    pool_size = top_n + max_substitute_depth
+    books = load_top_n(csv_path, n=pool_size, scorer_root=scorer_root)
+    if not books:
+        return DailyRunResult(
+            date=datetime.now().date().isoformat(), source_csv=csv_path,
+        )
+
+    priority = books[:top_n]
+    extras = books[top_n:]
+    rng = Random(shuffle_seed) if shuffle_seed is not None else Random()
+    rng.shuffle(priority)
+    pool = priority + extras
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().date().isoformat()
+    result = DailyRunResult(date=today, source_csv=csv_path)
+    stories_dir = output_root / today / "stories"
+    stories_dir.mkdir(parents=True, exist_ok=True)
+
+    attempts = 0
+    while attempts < top_n and pool:
+        book = pool.pop(0)
+        try:
+            out = generate_story(
+                hook=book.synopsis,
+                genre=book.genre,
+                target_length=12000,
+                tone=None,
+                output_dir=stories_dir,
+                slug=_slugify_daily(book.title, book.author),
+                config=config,
+            )
+            _stamp_daily_meta(out, book)
+            result.generated.append(out)
+            result.api_calls += _read_manifest_llm_calls(out)
+            attempts += 1
+        except (GenerationFailed, FileExistsError) as e:
+            result.failures.append({
+                "rank": book.rank,
+                "title": book.title,
+                "reason": str(e),
+                "traceback_excerpt": None,
+            })
+        except Exception as e:
+            result.failures.append({
+                "rank": book.rank,
+                "title": book.title,
+                "reason": type(e).__name__ + ": " + str(e),
+                "traceback_excerpt": traceback.format_exc(limit=3),
+            })
+    return result
+
+
+_DAILY_SLUG_RE = re.compile(r"[^\w]+", re.UNICODE)
+
+
+def _slugify_daily(title: str, author: str) -> str:
+    """Slug = <title>-<author>, filesystem-safe, max 60 chars total."""
+    s = _DAILY_SLUG_RE.sub("-", f"{title}-{author}").strip("-")
+    return s[:60] or "story"
+
+
+def _read_manifest_llm_calls(story_dir: Path) -> int:
+    """Read story_dir/manifest.json and return its `llm_calls` field. 0 if missing."""
+    manifest_path = story_dir / "manifest.json"
+    if not manifest_path.exists():
+        return 0
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            return int(json.load(f).get("llm_calls", 0))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
+
+
+def _stamp_daily_meta(story_dir: Path, book: RankedBook) -> None:
+    """Add daily_rank/daily_title/daily_author to the story's manifest.json."""
+    manifest_path = story_dir / "manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+    data["daily_rank"] = book.rank
+    data["daily_title"] = book.title
+    data["daily_author"] = book.author
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)

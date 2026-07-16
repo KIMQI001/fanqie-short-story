@@ -9,12 +9,19 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import MagicMock, patch
+
 from fanqie_short_story.daily import (
     DailyRunError,
+    DailyRunResult,
+    LOCK_PATH,
+    LOCK_TIMEOUT_SECONDS,
     _lookup_synopses,
     find_latest_scores_csv,
     load_top_n,
+    run_daily,
 )
+from fanqie_short_story.pipeline import GenerationFailed
 
 
 def test_find_latest_scores_csv_returns_newest(tmp_path: Path) -> None:
@@ -170,3 +177,175 @@ def test_lookup_synopses_skips_null_synopsis(tmp_path: Path) -> None:
     _create_topic_scorer_db(tmp_path, with_synopsis_col=True)
     result = _lookup_synopses(tmp_path, ["id1", "id2"])
     assert result == {"id1": "synopsis of book 1"}  # id2's NULL dropped
+
+
+# --------------------------------------------------------------------------
+# Tests for run_daily — Task 6 / v0.3.0
+# --------------------------------------------------------------------------
+
+def _make_config(tmp_path: Path) -> MagicMock:
+    """Mock Config with the minimum fields run_daily + generate_story touch."""
+    cfg = MagicMock()
+    cfg.critique = MagicMock()
+    return cfg
+
+
+def _write_topic_scorer_output(scorer_root: Path, n: int) -> Path:
+    """Create a fake <scorer_root>/output/runs/<week>/scores.csv with n rows.
+
+    Creates the topic-scorer DB with the `books` table + `synopsis` column but
+    WITHOUT populating any synopsis rows. This forces the spec §3.4 soft
+    fallback (row-missing → title-as-hook) for every book.
+    """
+    runs = scorer_root / "output" / "runs" / "2026-W29"
+    runs.mkdir(parents=True)
+    csv_path = runs / "scores.csv"
+    _write_csv(csv_path, n=n)
+    _create_topic_scorer_db(scorer_root, with_synopsis_col=True, populate_synopses=False)
+    return csv_path
+
+
+def test_run_daily_generates_5_with_top5_priority(tmp_path: Path) -> None:
+    """Happy path: all 5 stories succeed, top-5 selected."""
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+
+    with patch("fanqie_short_story.daily.generate_story") as mock_gen:
+        mock_gen.return_value = Path("output/stories/foo")
+        result = run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=7,
+        )
+
+    assert len(result.generated) == 5
+    assert result.failures == []
+    assert mock_gen.call_count == 5
+
+
+def test_run_daily_substitutes_on_generation_failed(tmp_path: Path) -> None:
+    """First-attempt raises GenerationFailed → substitute from extras succeeds."""
+    from random import Random as _Random
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+
+    call_count = {"n": 0}
+
+    def fake_gen(*, hook, genre, target_length, **_):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise GenerationFailed("boom", output_dir=out_root / "slug1")
+        return out_root / f"slug{call_count['n']}"
+
+    expected_first_rank = [1, 2, 3, 4, 5]
+    _Random(0).shuffle(expected_first_rank)
+
+    with patch("fanqie_short_story.daily.generate_story", side_effect=fake_gen):
+        result = run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=7,
+            shuffle_seed=0,
+        )
+
+    assert len(result.generated) == 5
+    assert len(result.failures) == 1
+    assert 1 <= result.failures[0]["rank"] <= 5
+    assert result.failures[0]["rank"] == expected_first_rank[0]
+    assert result.failures[0]["reason"] == "boom"
+
+
+def test_run_daily_records_traceback_on_unexpected_exception(tmp_path: Path) -> None:
+    """Unexpected Exception → failures[].traceback_excerpt populated."""
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+
+    def fake_gen(*, hook, genre, target_length, **_):
+        if hook == "title1":
+            raise ValueError("totally unexpected")
+        return out_root / "slug"
+
+    with patch("fanqie_short_story.daily.generate_story", side_effect=fake_gen):
+        result = run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=7,
+        )
+
+    assert len(result.failures) == 1
+    assert "totally unexpected" in (result.failures[0]["traceback_excerpt"] or "")
+
+
+def test_run_daily_stops_when_pool_exhausted(tmp_path: Path) -> None:
+    """Pool of 3, all fail → 0 generated, 3 failures."""
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=3)
+    out_root = tmp_path / "out"
+
+    with patch(
+        "fanqie_short_story.daily.generate_story",
+        side_effect=GenerationFailed("nope", output_dir=out_root / "x"),
+    ):
+        result = run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=0,
+        )
+
+    assert len(result.generated) == 0
+    assert len(result.failures) == 3
+
+
+def test_run_daily_shuffles_top5_indices(tmp_path: Path) -> None:
+    """Priority order is randomized with a fixed seed; we can predict the shuffle."""
+    import random as _random
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+
+    captured_titles: list[str] = []
+
+    def fake_gen(*, hook, genre, target_length, **_):
+        captured_titles.append(hook)
+        return out_root / "slug"
+
+    expected = ["title1", "title2", "title3", "title4", "title5"]
+    _random.Random(42).shuffle(expected)
+
+    with patch("fanqie_short_story.daily.generate_story", side_effect=fake_gen):
+        run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=0,
+            shuffle_seed=42,
+        )
+
+    assert captured_titles == expected
+
+
+def test_run_daily_handles_no_scores_csv(tmp_path: Path) -> None:
+    """Empty scorer_root → FileNotFoundError propagates from find_latest_scores_csv."""
+    scorer = tmp_path / "scorer"
+    out_root = tmp_path / "out"
+
+    with pytest.raises(FileNotFoundError, match="scores.csv"):
+        run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=5,
+            max_substitute_depth=7,
+        )
