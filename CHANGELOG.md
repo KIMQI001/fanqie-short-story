@@ -3,7 +3,8 @@
 ## [v0.3.1] - 2026-07-16
 
 ### Fixed
-- **`daily.py` now applies `config.genre_mapping` before calling `generate_story`**. v0.3.0 passed the scorer's fine-grained sub-genre (e.g. `xuanhuan-xiuzhen`, `kehuan-moshi`) straight through, which failed at the pipeline's `ValueError: Unknown genre` check — meaning v0.3.0 daily automation would have never produced a story against the real scorer output. The `batch` CLI has translated these since v0.1.0 via `config.genre_mapping.get(source, source)`; `daily` now mirrors that. Unmapped genres pass through unchanged. Regression test: `test_run_daily_translates_csv_genre_via_config_mapping`.
+- **`config/defaults.yaml` `genre_mapping` now covers all 10 fanqie-topic-scorer sub-genres** (`xuanhuan-xiuzhen`, `xuanhuan-chuantong`, `dushi-richang`, `dushi-zhongtian`, `yanqing-gufeng`, `yanqing-xuanhuan`, `yanqing-haomen`, `yanqing-tianchong`, `kehuan-moshi`, `xuanyi-naodong`). The earlier hand-curated list had a typo (`dushi-rich` instead of `dushi-richang`) and missed 7 of the 10 actual sub-genres — caught by the e2e test run against the live scorer, which surfaced `ValueError: Unknown genre: 'dushi-richang'` for 3 of 12 attempts.
+- **`daily.py` now applies `config.genre_mapping` before calling `generate_story`**. v0.3.0 passed the scorer's fine-grained sub-genre (e.g. `xuanhuan-xiuzhen`, `kehuan-moshi`) straight through, which failed at the pipeline's `ValueError: Unknown genre` check — meaning v0.3.0 daily automation would have never produced a story against the real scorer output. The `batch` CLI has translated these since v0.1.0 via `config.genre_mapping.get(source, source)`; `daily` now mirrors that. Unmapped genres pass through unchanged. Regression tests: `test_run_daily_translates_csv_genre_via_config_mapping`, `test_default_genre_mapping_covers_all_topic_scorer_subgenres`.
 
 ## [v0.3.0] - 2026-07-16
 

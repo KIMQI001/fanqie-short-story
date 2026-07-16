@@ -7,9 +7,8 @@ Run: `python -m pytest tests/e2e/test_daily_run_once.py -m e2e -v`
 """
 from __future__ import annotations
 
+import json
 import os
-import shutil
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -50,10 +49,20 @@ def test_daily_run_once_against_real_minimax(tmp_path: Path) -> None:
         pytest.fail(f"daily run-once failed: exit {result.exit_code}\n"
                     f"STDOUT: {result.output}\nSTDERR: {result.stderr}")
 
-    today = date.today().isoformat()
-    manifest_path = output_root / today / "daily_manifest.json"
+    # Locate the manifest by scanning the day's subdir (output_root/<YYYY-MM-DD>/).
+    # We MUST NOT compute `date.today()` here — on long e2e runs this would race
+    # the CLI across midnight in local time and look for the manifest on the
+    # wrong day. The CLI uses `datetime.now().date()`; we mirror that by
+    # finding the most recently modified day subdir.
+    day_subdirs = sorted(
+        (p for p in output_root.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+    )
+    assert day_subdirs, (
+        f"no day subdir under {output_root} — daily run-once didn't write any output"
+    )
+    manifest_path = day_subdirs[-1] / "daily_manifest.json"
     assert manifest_path.exists(), f"missing manifest at {manifest_path}"
-    import json
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["totals"]["succeeded"] == 5
     assert len(manifest["generated"]) == 5

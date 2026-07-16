@@ -24,13 +24,26 @@ synopsis:
 cover:
   default_backend: auto
   image_size: [600, 800]
+# Mapping from fanqie-topic-scorer's fine-grained sub-genre labels (the
+# charts in fanqie-topic-scorer/config/defaults.yaml) to fanqie-short-story's
+# 5 umbrella genres. Keep in sync with that file: any new chart added there
+# must appear here or `daily run-once` will fail with `Unknown genre`.
+# Translation rationale per pair is in commit history.
 genre_mapping:
-  kehuan-moshi: naodong
-  xuanhuan-xiuzhen: chuanqi
-  dushi-rich: xianyan
-  xianyan-rich: xianyan
-  chuanyue-rich: chuanqi
-  yanqing: chuanqi
+  # 男频 xuanhuan branch → 传奇 (Epic / Mythic)
+  xuanhuan-xiuzhen: chuanqi     # 东方仙侠
+  xuanhuan-chuantong: chuanqi   # 传统玄幻
+  # 男频 dushi branch → 现言 (Modern Romance) or 甜宠 (Sweet Pet)
+  dushi-richang: xianyan        # 都市日常
+  dushi-zhongtian: tianchong    # 都市种田
+  # 女频 yanqing branch
+  yanqing-gufeng: chuanqi       # 古风世情 (period drama → epic)
+  yanqing-xuanhuan: xianyan     # 玄幻言情
+  yanqing-haomen: xianyan       # 豪门总裁
+  yanqing-tianchong: tianchong  # 青春甜宠
+  # 特殊
+  kehuan-moshi: naodong         # 科幻末世
+  xuanyi-naodong: xuanyi        # 悬疑脑洞
 
 # v0.3.0 additions:
 daily:

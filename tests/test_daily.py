@@ -586,3 +586,66 @@ def test_run_daily_translates_csv_genre_via_config_mapping(tmp_path: Path) -> No
             f"fine-grained CSV genre leaked through to generate_story: "
             f"{passed_genre!r}"
         )
+
+
+# --------------------------------------------------------------------------
+# Default-config completeness: every chart in fanqie-topic-scorer's defaults
+# must be translated by the default `genre_mapping`. Regression: v0.3.1's
+# initial hand-curated mapping had `dushi-rich` (typo) instead of
+# `dushi-richang`, and missed 7 of the 10 fanqie-topic-scorer sub-genres
+# entirely — the live e2e test caught 3 of them with `Unknown genre`.
+# --------------------------------------------------------------------------
+
+
+def test_default_genre_mapping_covers_all_topic_scorer_subgenres() -> None:
+    """Every `genre` label in fanqie-topic-scorer/config/defaults.yaml must
+    appear as a KEY in fanqie-short-story/config/defaults.yaml's
+    `genre_mapping`, with a value that is one of fanqie-short-story's 5
+    umbrella genres.
+
+    This stops typos (dushi-rich vs dushi-richang) and missing entries from
+    shipping silently. If you add a new chart to the scorer's defaults,
+    this test will fail until you add the matching umbrella mapping.
+    """
+    import yaml
+    from fanqie_short_story import config as fss_config_mod
+
+    # Resolve both YAMLs by going through the same path the runtime uses.
+    repo_root = Path(fss_config_mod.__file__).resolve().parents[2]
+    fss_yaml = repo_root / "config" / "defaults.yaml"
+    scorer_yaml = (
+        Path.home() / "CascadeProjects" / "projects" / "fanqie-topic-scorer"
+        / "config" / "defaults.yaml"
+    )
+    assert fss_yaml.exists(), f"missing fanqie-short-story config at {fss_yaml}"
+    assert scorer_yaml.exists(), (
+        f"missing fanqie-topic-scorer config at {scorer_yaml}; "
+        f"sibling repo not cloned to the conventional path"
+    )
+
+    with fss_yaml.open(encoding="utf-8") as f:
+        fss_raw = yaml.safe_load(f) or {}
+    with scorer_yaml.open(encoding="utf-8") as f:
+        scorer_raw = yaml.safe_load(f) or {}
+
+    # Authoritative source: the scorer's `fetch.charts[].genre` list.
+    charts = (scorer_raw.get("fetch") or {}).get("charts") or []
+    scorer_subgenres = sorted({c["genre"] for c in charts if "genre" in c})
+
+    mapping = fss_raw.get("genre_mapping") or {}
+    UMBRELLA = {"chuanqi", "xianyan", "xuanyi", "tianchong", "naodong"}
+
+    missing = [g for g in scorer_subgenres if g not in mapping]
+    invalid_values = sorted(
+        {g: mapping[g] for g in scorer_subgenres if g in mapping}.items()
+        - {kv for kv in mapping.items() if kv[1] in UMBRELLA}
+    )
+    assert not missing, (
+        f"genre_mapping is missing entries for these scorer sub-genres: "
+        f"{missing}. Add them to config/defaults.yaml so that `daily run-once` "
+        f"stops failing with `Unknown genre` against the real scorer."
+    )
+    assert not invalid_values, (
+        f"genre_mapping maps scorer sub-genres to non-umbrella genres "
+        f"(must be one of {sorted(UMBRELLA)}): {invalid_values}"
+    )
