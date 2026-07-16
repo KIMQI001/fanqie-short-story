@@ -26,6 +26,11 @@ class StoryManifest:
     failed: bool = False
     failure_reason: str | None = None
 
+    critique_strategy: str = "heuristic_only"
+    heuristic_attempts: int = 0
+    llm_critic_attempts: int = 0
+    accepted_after_critic_cap: bool = False
+
 
 def write_manifest(output_dir: Path, manifest: StoryManifest) -> Path:
     payload = asdict(manifest)
