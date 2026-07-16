@@ -54,7 +54,7 @@ def call_llm(
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    resp = httpx.post(url, json=body, headers=headers, timeout=120.0)
+    resp = httpx.post(url, json=body, headers=headers, timeout=300.0)
     if 400 <= resp.status_code < 500:
         raise LLMError(f"LLM {resp.status_code}: {resp.text[:300]}")
     resp.raise_for_status()
