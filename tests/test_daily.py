@@ -511,3 +511,78 @@ def test_write_daily_manifest_source_csv_week_fallback(tmp_path: Path) -> None:
     manifest_path = write_daily_manifest(out_dir, result)
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert data["source_csv_week"] == "unknown"
+
+
+# --------------------------------------------------------------------------
+# Genre-mapping translation (v0.3.1 regression — the e2e test caught this
+# against the real scorer, whose CSV uses fine-grained sub-genres like
+# `xuanhuan-xiuzhen` while fanqie-short-story's pipeline only knows the
+# 5 umbrella genres. The `batch` CLI handles this with
+# `config.genre_mapping.get(source_genre, source_genre)`; the `daily`
+# orchestrator must do the same.
+# --------------------------------------------------------------------------
+
+
+def test_run_daily_translates_csv_genre_via_config_mapping(tmp_path: Path) -> None:
+    """run_daily must apply config.genre_mapping before calling generate_story.
+
+    Regression: v0.3.0 daily pass book.genre straight through, which fails
+    with `ValueError: Unknown genre: 'xuanhuan-xiuzhen'` against the real
+    scorer output (the e2e test surfaced this). The `batch` CLI has been
+    doing this translation since v0.1.0; `daily` must match.
+    """
+    scorer = tmp_path / "scorer"
+    runs = scorer / "output" / "runs" / "2026-W30"
+    runs.mkdir(parents=True)
+    csv_path = runs / "scores.csv"
+    csv_path.write_text(
+        "rank,book_id,title,author,genre,chapters_count,in_read,overall,"
+        "dim_hook,dim_plot,rationale\n"
+        "1,id1,Title,Auth,xuanhuan-xiuzhen,100,1,8.0,7,7,r\n"
+        "2,id2,T2,A2,kehuan-moshi,100,1,7.5,7,7,r\n"
+        "3,id3,T3,A3,chuanqi,100,1,7.0,7,7,r\n",  # already-umbrella → no-op mapping
+        encoding="utf-8",
+    )
+    # Populate the synopsis lookup so the orchestrator has real hooks.
+    db = scorer / "output" / "fanqie.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("CREATE TABLE books (book_id TEXT PRIMARY KEY, synopsis TEXT)")
+        conn.executemany(
+            "INSERT INTO books VALUES (?, ?)",
+            [("id1", "syn1"), ("id2", "syn2"), ("id3", "syn3")],
+        )
+
+    cfg = MagicMock()
+    cfg.critique = MagicMock()
+    cfg.genre_mapping = {
+        "xuanhuan-xiuzhen": "chuanqi",
+        "kehuan-moshi": "naodong",
+        "chuanqi": "chuanqi",  # identity-mapping also passes through
+    }
+
+    with patch("fanqie_short_story.daily.generate_story") as mock_gen:
+        mock_gen.return_value = Path("output/stories/x")
+        result = run_daily(
+            config=cfg,
+            scorer_root=scorer,
+            output_root=tmp_path / "out",
+            top_n=3,
+            max_substitute_depth=0,
+        )
+
+    assert result.failures == [], (
+        f"expected no failures, got: {result.failures}"
+    )
+    assert mock_gen.call_count == 3
+    # Every generate_story call must receive the MAPPED umbrella genre,
+    # never the fine-grained CSV label.
+    for call in mock_gen.call_args_list:
+        passed_genre = call.kwargs["genre"]
+        assert passed_genre in {"chuanqi", "naodong"}, (
+            f"expected umbrella genre after mapping, got {passed_genre!r}"
+        )
+        assert "-" not in passed_genre, (
+            f"fine-grained CSV genre leaked through to generate_story: "
+            f"{passed_genre!r}"
+        )

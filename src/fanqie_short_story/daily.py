@@ -231,10 +231,15 @@ def _run_daily_unlocked(
     attempts = 0
     while attempts < top_n and pool:
         book = pool.pop(0)
+        # Translate the scorer's fine-grained sub-genre (e.g. "xuanhuan-xiuzhen")
+        # to the umbrella genre the pipeline understands ("chuanqi"). Mirrors
+        # what `batch` CLI has done since v0.1.0. Unmapped genres pass through
+        # unchanged so callers with already-umbrella labels still work.
+        mapped_genre = config.genre_mapping.get(book.genre, book.genre)
         try:
             out = generate_story(
                 hook=book.synopsis,
-                genre=book.genre,
+                genre=mapped_genre,
                 target_length=12000,
                 tone=None,
                 output_dir=stories_dir,
