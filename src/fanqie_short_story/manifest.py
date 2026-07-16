@@ -21,10 +21,10 @@ class StoryManifest:
     critique_notes: list[str]
     cover_backend: str | None
     llm_calls: int
-    estimated_tokens: int
     output_files: list[str]
     failed: bool = False
     failure_reason: str | None = None
+    estimated_tokens: int | None = None
 
     critique_strategy: str = "heuristic_only"
     heuristic_attempts: int = 0

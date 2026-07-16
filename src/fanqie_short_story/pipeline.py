@@ -98,7 +98,6 @@ def generate_story(
 
         if not llm_enabled:
             # heuristic-only mode (v0.1.0 behavior with kill switch)
-            critique_strategy = "heuristic_only"
             break
 
         if llm_critic_attempts >= max_llm_calls:
@@ -179,8 +178,10 @@ def generate_story(
         llm_critic_attempts=llm_critic_attempts,
         accepted_after_critic_cap=accepted_after_critic_cap,
         cover_backend=cover_backend_used,
-        llm_calls=1 + iterations + 1 + 1,  # outline + body attempts + title + synopsis
-        estimated_tokens=0,  # tracked separately in future
+        # outline (1) + body attempts (iterations) + title (1) + synopsis (1).
+        # Does NOT include LLM critic calls — those are tracked separately in llm_critic_attempts.
+        llm_calls=1 + iterations + 1 + 1,
+        estimated_tokens=None,  # not tracked yet; reserved field for future token accounting
         output_files=sorted(
             p.name for p in story_dir.iterdir()
             if p.is_file() and p.name != "manifest.json"
