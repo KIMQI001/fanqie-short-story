@@ -458,12 +458,17 @@ def test_write_daily_manifest_json_schema(tmp_path: Path) -> None:
     assert manifest_path == out_dir / "daily_manifest.json"
 
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_scorer_root = str(csv_path.parent.parent.parent.parent)
     assert data["date"] == "2026-07-16"
     assert data["source_csv"] == str(csv_path)
+    assert data["scorer_root"] == expected_scorer_root
+    assert data["source_csv_mtime"] and "T" in data["source_csv_mtime"]
     assert data["top_n_requested"] == 5
     assert data["substitute_pool_size"] == 7
     assert len(data["generated"]) == 1
-    assert data["generated"][0]["rank"] is None or "rank" in data["generated"][0]
+    assert data["generated"][0]["rank"] is None
+    assert data["generated"][0]["title"] is None
+    assert data["generated"][0]["author"] is None
     assert data["failures"] == result.failures
     assert data["totals"]["api_calls"] == 27
 

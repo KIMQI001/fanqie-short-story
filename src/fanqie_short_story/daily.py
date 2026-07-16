@@ -362,7 +362,7 @@ def write_daily_manifest(
         "source_csv": str(result.source_csv),
         "source_csv_mtime": mtime.isoformat(),
         "source_csv_week": week,
-        "scorer_root": str(result.source_csv.parent.parent.parent),
+        "scorer_root": str(result.source_csv.parent.parent.parent.parent),
         "top_n_requested": top_n_requested,
         "substitute_pool_size": substitute_pool_size,
         "generated": generated_entries,
