@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ class Config:
     synopsis: dict[str, Any]
     cover: dict[str, Any]
     genre_mapping: dict[str, str]
+    daily: dict[str, Any] = field(default_factory=dict)
 
 
 def load_config(yaml_path: Path | str) -> Config:
@@ -58,4 +59,5 @@ def load_config(yaml_path: Path | str) -> Config:
         synopsis=raw.get("synopsis", {}),
         cover=raw.get("cover", {}),
         genre_mapping=raw.get("genre_mapping", {}),
+        daily=raw.get("daily", {}),
     )

@@ -69,6 +69,41 @@ critique:
 
 Set `llm_enabled: false` to revert to v0.1.0's heuristic-only critique.
 
+## Daily automation (v0.3.0)
+
+`fanqie-short-story` can run unattended every day, sourcing from the weekly
+`fanqie-topic-scorer` scan and writing 5 stories with covers to
+`output/daily/<date>/`.
+
+```bash
+# one-time setup
+export MINIMAX_API_KEY=sk-...   # or ANTHROPIC_API_KEY
+fanqie-story daemon install --time 06:00
+
+# monitor
+fanqie-story daemon status
+
+# one-off run (same code path as launchd uses)
+fanqie-story daily run-once
+
+# tear down
+fanqie-story daemon uninstall
+```
+
+The launchd plist lives at
+`~/Library/LaunchAgents/com.troah.fanqie-short-story.daily.plist`.
+Launchd's stdout/stderr stream to `~/Library/Logs/fanqie-short-story/daily.{out,err}`,
+and each scheduled invocation additionally writes a timestamped
+`daily-<date>.log` alongside them. A `daily.lock` file at
+`~/.local/share/fanqie-short-story/` prevents concurrent scheduled + manual
+runs (5-minute timeout).
+
+The daily orchestrator picks the **newest** `scores.csv` under
+`<scorer_root>/output/runs/*/`, takes the top 5 (with rank 6-12 as a
+substitute pool), randomizes the priority order, and generates each story
+end-to-end. If a story fails, the next pool entry is tried. Each day's run
+is summarized in `output/daily/<date>/daily_manifest.json`.
+
 ## Architecture
 
 See `docs/superpowers/specs/2026-07-16-fanqie-short-story-design.md` (in the
