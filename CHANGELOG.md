@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.3.2] - 2026-07-17
+
+### Fixed
+- **`daily.py` `_run_daily_unlocked` now passes `target_length=8000` to `generate_story`** (was `12000`). The pipeline's `±20%` length tolerance gives a window of `6400-9600` for target=8000, which matches the only known-good heuristic calibration: v0.1.0/v0.2.0's `tests/e2e/test_real_generate.py` uses `target_length=8000` with `±50%` length tolerance (4000-12000) — the heuristic was validated only against that hand-picked hook fixture and never re-validated for open-ended daily hooks at 12000. v0.3.0/v0.3.1's `12000 ±20%` (9600-14400) is too narrow for real LLM output: the v0.3.1 diagnostic e2e run showed bodies of 4618/6566/8024/12042 chars, with 3/4 failing the length gate (2 below 9600, 1 above 14400). Regression test: `test_run_daily_passes_target_length_8000`.
+
 ## [v0.3.1] - 2026-07-16
 
 ### Fixed

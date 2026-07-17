@@ -240,7 +240,7 @@ def _run_daily_unlocked(
             out = generate_story(
                 hook=book.synopsis,
                 genre=mapped_genre,
-                target_length=12000,
+                target_length=8000,
                 tone=None,
                 output_dir=stories_dir,
                 slug=_slugify_daily(book.title, book.author),

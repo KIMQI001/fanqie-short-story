@@ -402,6 +402,41 @@ def test_run_daily_raises_dailyrunerror_on_lock_timeout(tmp_path: Path, monkeypa
         blocker.release()
 
 
+def test_run_daily_passes_target_length_8000(tmp_path: Path) -> None:
+    """Regression: v0.3.0/0.3.1 hardcoded target_length=12000 in _run_daily_unlocked,
+    but the pipeline's ±20% length tolerance window (9600-14400) is too narrow for
+    real LLM output (~5000-12000 chars per the v0.3.1 e2e diagnostic run). Real
+    LLM routinely produces bodies below 9600, failing the length gate → 0/5
+    succeeded rate.
+
+    Match v0.1.0/v0.2.0 e2e setting (target_length=8000) which is the only
+    known-good value the heuristic was actually validated against (the v0.1.0
+    hand-picked hook fixture pre-satisfied all 4 gates; the heuristic was
+    never re-validated for open-ended hooks at 12000).
+    """
+    scorer = tmp_path / "scorer"
+    _write_topic_scorer_output(scorer, n=12)
+    out_root = tmp_path / "out"
+
+    with patch("fanqie_short_story.daily.generate_story") as mock_gen:
+        mock_gen.return_value = Path("output/stories/foo")
+        run_daily(
+            config=_make_config(tmp_path),
+            scorer_root=scorer,
+            output_root=out_root,
+            top_n=2,
+            max_substitute_depth=0,
+        )
+
+    assert mock_gen.call_count == 2
+    for call in mock_gen.call_args_list:
+        assert call.kwargs["target_length"] == 8000, (
+            f"expected target_length=8000 (matches v0.1.0 e2e setting), "
+            f"got {call.kwargs['target_length']!r}. The previous 12000 "
+            f"±20% window (9600-14400) is too narrow for real LLM output."
+        )
+
+
 def test_run_daily_records_api_calls_total(tmp_path: Path) -> None:
     """Spec §8 item 16: result.api_calls sums the per-story llm_calls across
     all 5 generated stories. Build fake story manifest.json files and verify
