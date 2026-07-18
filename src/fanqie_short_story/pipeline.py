@@ -190,35 +190,37 @@ def generate_story(
         critique_notes.append(f"[editor_critic] {'; '.join(failed_notes)}")
 
         # v0.4.0 outline backtrack: structural failure + cap not exhausted
-        # → regenerate outline + body. Surface failures alone don't backtrack.
-        if (editor_report.structural_failure
-                and outline_backtrack_count < editor_backtrack_cap):
-            outline_backtrack_count += 1
-            outline = generate_outline(
-                hook=hook, genre=genre, target_length=target_length,
-                tone=tone or "sweet_with_suspense", config=config,
-            )
-            (story_dir / "outline.md").write_text(
-                outline.to_prompt_string(), encoding="utf-8",
-            )
-            critique_notes.append(
-                f"[outline_backtrack] regenerated outline "
-                f"({outline_backtrack_count}/{editor_backtrack_cap})"
-            )
-            feedback = failed_notes  # body still gets the failed-cat feedback
-            continue
-
-        # Either: surface-only failure (no backtrack), or backtrack cap
-        # exhausted (accept body with structural failure). Either way, ship.
-        critique_strategy = "heuristic_then_editor"
-        if editor_report.structural_failure and outline_backtrack_count >= editor_backtrack_cap:
+        # → regenerate outline + body. Surface failures alone don't backtrack
+        # but still retry body (with failed-category notes as feedback).
+        if editor_report.structural_failure:
+            critique_strategy = "heuristic_then_editor"
+            if outline_backtrack_count < editor_backtrack_cap:
+                outline_backtrack_count += 1
+                outline = generate_outline(
+                    hook=hook, genre=genre, target_length=target_length,
+                    tone=tone or "sweet_with_suspense", config=config,
+                )
+                (story_dir / "outline.md").write_text(
+                    outline.to_prompt_string(), encoding="utf-8",
+                )
+                critique_notes.append(
+                    f"[outline_backtrack] regenerated outline "
+                    f"({outline_backtrack_count}/{editor_backtrack_cap})"
+                )
+                feedback = failed_notes
+                continue
+            # Backtrack cap exhausted — accept body with structural failure.
             accepted_after_critic_cap = True
             print(
                 f"warning: editor structural-failure cap reached "
                 f"({outline_backtrack_count}/{editor_backtrack_cap}); "
                 f"accepting body"
             )
-        break
+            break
+
+        # Surface-only failure: retry body WITHOUT outline backtrack.
+        critique_strategy = "heuristic_then_editor"
+        continue
     else:
         # Loop exhausted without break. Preserve v0.1.0's _failed/ artifact writes for audit.
         failed_dir = story_dir / "_failed"
