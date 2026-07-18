@@ -242,6 +242,9 @@ def test_pipeline_caps_backtracks_at_one(
     data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert len(outline_calls) == 2
     assert data["outline_backtrack_count"] == 1
+    # Cap reached with structural failure still present → accept-with-cap flag set.
+    assert data["accepted_after_critic_cap"] is True
+    assert data["critique_strategy"] == "heuristic_then_editor"
 
 
 def test_pipeline_skips_backtrack_on_surface_failure(
