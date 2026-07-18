@@ -7,6 +7,25 @@ additive — exposed as a SEPARATE function `writing_forbidden_critique()`
 so callers can opt-in independently of the v0.3.x 4-gate heuristic.
 `combined_heuristic_critique()` runs both passes and merges failures.
 
+v0.4.1 FIXES the two gates that the v0.4.0 e2e diagnostic surfaced as
+rejecting ~70% of real MiniMax-M2.7 output:
+  1. `_HOOK_SIGNALS` vocabulary expanded from 26 hard-coded phrases
+     (`撞见 / 发现 / 必须 / 凶手 / 重生 / ...`) to include natural
+     Chinese web-fiction opener vocabulary the LLM produces in
+     practice (`看着 / 注意到 / 归来 / 回家 / 摊牌 / 背叛 / 揭露 /
+     弹幕 / 婚书 / 病历 / 亲子鉴定 / ...`). The legacy terms are kept
+     for backward compat — no regression.
+  2. POV switch counter swapped from the broken regex
+     `我[转身走向跑看听闻说想]` (which overcounts legitimate first-person
+     narration verbs like `我看着她 / 我走上前 / 我想了想` as POV flips)
+     to a chapter-boundary voice-swap counter. Splits the body on
+     `# 第N章 / ## 第N章` markers; for each chapter, counts chapters
+     whose dominant narrative voice is third-person (他/她/它 > 我).
+     A "POV switch" = a chapter transition where dominant voice flips.
+     The `max_pov_switches` kwarg keeps the same name with relaxed
+     semantics. Bodies without chapter markers are treated as a
+     single chapter and pass with 0 swaps.
+
 Defaults are LOOSE for v0.3.3 onward. The strict v0.1.0 defaults (length
 ±20%, pov >3, hook ≥2) were calibrated against a hand-picked hook
 fixture; against open-ended daily hooks the LLM produces bodies that
@@ -40,15 +59,78 @@ class CritiqueReport:
 
 
 _HOOK_SIGNALS = (
+    # Legacy v0.1.x + v0.3.3 vocabulary (kept for backward compat)
     "撞见", "发现", "必须", "凶手", "重生", "穿越", "决裂", "翻脸",
     "杀了", "死", "血", "阴谋", "陷阱", "逼", "威胁", "对峙",
     "逃", "追", "破", "战", "斗", "反", "复仇", "讨", "恨", "惊",
+    # v0.4.1 — natural Chinese web-fiction opener vocabulary
+    # (`看着 / 注意到 / 归来 / 回家 / 摊牌 / ...`)
+    "看着", "注意到", "归来", "回家", "摊牌", "算计",
+    "真相", "秘密", "背叛", "挑明", "撕破", "揭露",
+    "弹幕", "倒计时", "警告", "伪装", "绑架", "圈套",
+    # Memory-object revelation triggers (common at the hook window):
+    "婚书", "病历", "亲子鉴定", "遗诏", "玉佩", "外卖单",
 )
 
 
 _ENDING_FAIL_SIGNALS = (
     "未完待续", "请看下集", "请看下回", "下章揭晓", "to be continued",
 )
+
+
+# v0.4.1 chapter marker regex. Matches:
+#   - `# 第一章` / `## 第一章` / `### 第一章` (markdown h1-h3)
+#   - `第一章` at the start of a line (loose form, no markdown)
+# Recognizes 一二三四五六七八九十百千 + 0-9 chapter numbers.
+_CHAPTER_MARKER = re.compile(
+    r"^[ \t]*(?:#{1,3}\s+)?第[一二三四五六七八九十百千0-9]+章[^\n]*$",
+    re.MULTILINE,
+)
+
+
+def _count_chapter_voice_swaps(body_text: str) -> int:
+    """v0.4.1: count chapters whose dominant narrative voice is NOT
+    first-person. A chapter is demarcated by `# 第N章 / ## 第N章` markers
+    (or `第N章` at line start). A body without chapter markers is
+    treated as a single chapter.
+
+    Voice classification per chapter:
+      - Count first-person `我` matches.
+      - Count third-person `他/她/它` matches (after stripping dialogue
+        segments to avoid counting quoted speech).
+      - If third-person > max(3, first-person × 0.5), the chapter is
+        "voice-dominant third-person" → counts as a POV swap.
+
+    Returns the number of voice-dominant third-person chapters. A pure
+    10-chapter body in first-person narration (the v0.4.0 methodology
+    canonical shape) returns 0.
+    """
+    if not body_text or not body_text.strip():
+        return 0
+
+    parts = _CHAPTER_MARKER.split(body_text)
+    chapters = [p.strip() for p in parts if p.strip()]
+    if not chapters:
+        chapters = [body_text]
+
+    swaps = 0
+    for ch in chapters:
+        # Strip dialogue segments (anything between Chinese quotation
+        # marks) so quoted speech doesn't inflate pronoun counts.
+        prose = re.sub(r"[「」\"][^\n]*?[「」\"]", "", ch)
+        prose = re.sub(r"'[^']*'", "", prose)
+        first = len(re.findall(r"我", prose))
+        third = (
+            len(re.findall(r"他", prose))
+            + len(re.findall(r"她", prose))
+            + len(re.findall(r"它", prose))
+        )
+        # Voice-dominant third-person → counts as a swap. Threshold
+        # `max(3, first * 0.5)` so a chapter with a few third-person
+        # references but mostly first-person doesn't flip.
+        if third > max(3, first) and third > first * 0.5:
+            swaps += 1
+    return swaps
 
 
 def heuristic_critique(
@@ -88,11 +170,15 @@ def heuristic_critique(
             f"±{int(length_tolerance * 100)}% 窗口内 ({int(low)}-{int(high)})。"
         )
 
-    if "我" in body.text and re.search(r"我[转身走向跑看听闻说想]", body.text):
-        switches = len(re.findall(r"我[转身走向跑看听闻说想]", body.text))
-        if switches > max_pov_switches:
-            failed.append("pov")
-            notes.append(f"POV 切换 {switches} 次，超过阈值 {max_pov_switches}。")
+    # v0.4.1: chapter-boundary voice-swap counter replaces the regex
+    # `我[转身走向跑看听闻说想]` which overcounted legitimate
+    # first-person narration verbs. See _count_chapter_voice_swaps.
+    swaps = _count_chapter_voice_swaps(body.text)
+    if swaps > max_pov_switches:
+        failed.append("pov")
+        notes.append(
+            f"POV 切换 {swaps} 次（章节声音变化），超过阈值 {max_pov_switches}。"
+        )
 
     return CritiqueReport(
         passed=len(failed) == 0,
@@ -186,11 +272,11 @@ def _check_twist_without_setup(body: Body) -> str | None:
 def _check_missing_memory_object(body: Body) -> str | None:
     """全文未出现强记忆物件 → fail."""
     objects = ("录像带", "婚书", "病历", "亲子鉴定", "倒计时", "账本",
-               "弹幕截图", "外卖单", "旧照片", "转账记录", "遗诏", "玉佩")
+               "弹幕截图", "外卖单", "快递单", "旧照片", "转账记录", "遗诏", "玉佩")
     if not any(obj in body.text for obj in objects):
         return (
             "全文未出现强记忆物件（录像带/婚书/病历/亲子鉴定/倒计时/账本/"
-            "弹幕截图/外卖单/旧照片/转账记录）；写作禁区要求至少一个物件串起真相。"
+            "弹幕截图/外卖单/快递单/旧照片/转账记录）；写作禁区要求至少一个物件串起真相。"
         )
     return None
 

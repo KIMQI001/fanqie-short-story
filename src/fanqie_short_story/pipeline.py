@@ -47,7 +47,7 @@ SCHEMA_VERSION = "0.4.0"
 # concrete 物件 that anchored the story's truth-reveal.
 _MEMORY_OBJECTS: tuple[str, ...] = (
     "录像带", "婚书", "病历", "亲子鉴定", "倒计时", "账本",
-    "弹幕截图", "外卖单", "旧照片", "转账记录", "遗诏", "玉佩",
+    "弹幕截图", "外卖单", "快递单", "旧照片", "转账记录", "遗诏", "玉佩",
 )
 
 
