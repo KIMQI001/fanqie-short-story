@@ -58,3 +58,54 @@ daily:
   scorer_root: null              # null = default ~/CascadeProjects/projects/fanqie-topic-scorer
   output_root: "output/daily"
   log_dir: "logs/daily"
+
+# v0.4.0 additions — tomato hit-structure methodology.
+# Replaces v0.2.0's generic "sweet_with_suspense" tone with the platform's
+# 10-chapter template + 5-element premise + de-AI-flavor polish pipeline.
+
+# Mood axis: every story belongs to one major emotion; optional minor flavor.
+# Major MUST be one of: 爽 / 虐 / 甜 / 沙雕 / 悬疑. Minor is free-form, often empty.
+mood_axis:
+  major:
+    - 爽
+    - 虐
+    - 甜
+    - 沙雕
+    - 悬疑
+  minor:
+    - 治愈
+    - 惊悚
+    - 复仇
+  default:
+    major: "爽"
+    minor: null
+
+# Length tier — v0.2.0 hard-coded 8000 chars; public-market convention
+# for 番茄超短篇 is 8k-24.9k chars (8k = minimum, 12k = sweet-spot, 24.9k cap).
+# `short` tier (25k-100k) is reserved / not yet implemented.
+length_tier:
+  ultra_short:
+    min_chars: 8000
+    default_chars: 12000
+    max_chars: 24900
+  short:
+    min_chars: 25000
+    default_chars: 50000
+    max_chars: 100000
+  default: ultra_short
+
+# De-AI-flavor polish post-processor. Runs AFTER editor critic accepts the body.
+# intensity=1 = rule-based only (cheap, no LLM); intensity=2/3 add LLM pass.
+polish:
+  enabled: true                  # master kill switch
+  default_intensity: 1           # rule-based only (no LLM cost)
+  full_llm: false                # intensity=3 (full LLM restructure) is opt-in
+  auto_bump_on_backtrack: true   # if outline backtrack fires, intensity 1→2
+
+# v0.4.0: cap outline backtracks per story. When a structural-severity editor
+# failure occurs more than N times, the body is accepted with an audit note
+# instead of retrying indefinitely. Default 1 = single backtrack (the v0.2.0
+# style "retry body N times" is replaced by "retry outline once, then body").
+critique:
+  editor_max_structural_failures: 1
+
