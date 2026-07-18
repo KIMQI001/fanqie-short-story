@@ -63,19 +63,34 @@ def test_critique_fails_on_length_out_of_window_strict() -> None:
 
 
 def test_critique_fails_on_pov_flip_strict() -> None:
-    """Strict v0.1.0 contract (pov >3): 5 switches fail."""
+    """Strict contract (pov >2): 3 voice swaps fail at cap=2.
+
+    v0.4.1 update: chapter-boundary voice-swap counter replaces the
+    broken `我[转身走向跑看听闻说想]` regex. A single-chapter body
+    with mixed pronouns is NOT a POV swap any more — narration density
+    is normal in first-person web fiction. This fixture now constructs
+    a body with EXPLICIT alternating voice chapters.
+    """
+    ch_3rd_1 = "# 第一章\n\n" + ("她扑进母亲怀里，她哭着拥抱她。\n" * 30)
+    ch_3rd_2 = "\n# 第三章\n\n" + ("他挡在她身前，他冷笑。\n" * 30)
+    ch_3rd_3 = "\n# 第五章\n\n" + ("她看着他低头。\n" * 30)
     text = (
-        ("林晚冲向沈墨。" * 500)
-        + ("我转过身去。" * 5)
-        + ("沈墨扑向林晚。" * 500)
-        + "结局圆满收束。"
+        ch_3rd_1
+        + "\n# 第二章\n\n" + ("我转身走出去。\n" * 30)  # 1st-person
+        + ch_3rd_2
+        + "\n# 第四章\n\n" + ("我看着她，我问真相。\n" * 30)  # 1st
+        + ch_3rd_3
+        + "\n结局圆满收束。"
     )
     r = heuristic_critique(
         _body(text), hook="h", target_length=4000,
-        max_pov_switches=3,   # explicit strict kwarg
+        max_pov_switches=2,   # explicit strict kwarg
     )
-    # Heuristic: "我" appearing with POV-action verbs in a third-person body = POV flip.
-    assert "pov" in r.failed_gates
+    # 3 third-person-dominant chapters (1, 3, 5) → 3 > cap 2 → fail.
+    assert "pov" in r.failed_gates, (
+        f"3 voice swaps at strict cap=2 should fail; "
+        f"got failed_gates={r.failed_gates}"
+    )
 
 
 # ---------------------------------------------------------------------------
