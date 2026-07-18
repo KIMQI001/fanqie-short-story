@@ -1,5 +1,20 @@
 # Changelog
 
+## [v0.3.3] - 2026-07-18
+
+### Changed
+- **Loosened `heuristic_critique` defaults** to match real LLM output. The v0.1.0 defaults (±20% length, pov >3, hook ≥2 from a 26-phrase list) were calibrated against a hand-picked hook fixture (`tests/e2e/test_real_generate.py`) that pre-satisfied all 4 gates. Against open-ended daily hooks, the v0.3.2 e2e diagnostic showed the strict defaults rejected ~70% of real LLM bodies:
+  - `length_tolerance`: `0.20` → `0.50` (window 4000-12000 at target=8000)
+  - `max_pov_switches`: `3` → `8` (real LLM bodies routinely have 4-7 我+verb matches)
+  - `min_hook_signals`: hardcoded `2` → `1` (the LLM paraphrases the conflict — "斩杀"≠"杀了", "相逢"≠"撞见" — and rarely hits ≥2 of the 26 phrases in the first 200 chars)
+  - `_ENDING_FAIL_SIGNALS`: dropped `...` and `……` (legitimate Chinese trailing-thought punctuation, not "to be continued" markers)
+- **`config/defaults.yaml` `critique:` block updated to match the new defaults** (`length_tolerance: 0.50`, `max_pov_switches: 8`). The `length_tolerance` key is the only one already consumed by `pipeline.py`; the others are still function defaults. Pass explicit kwargs to `heuristic_critique` to recover strict v0.1.0–v0.3.2 behavior.
+
+### Tests
+- 106 unit tests pass (102 v0.3.2 + 4 new tests for the loosened defaults).
+- 2 existing tests that hardcoded at the strict legacy defaults now pass explicit kwargs (`length_tolerance=0.20`, `max_pov_switches=3`) so they keep testing the strict contract.
+- E2E not re-run for this change; expected impact: ≥3/5 success rate on `daily run-once` based on the v0.3.2 gate-failure histogram (hook 71% + length 54% + ending 46% + pov 38% combined → <30% with strict, >60% with loose).
+
 ## [v0.3.2] - 2026-07-17
 
 ### Fixed

@@ -1,6 +1,15 @@
 """Critique: check 4 gates — hook / ending / length / POV. Lenient: all
 heuristics are simple regex/string checks. False positives are OK; the
-designer is a human, not the user."""
+designer is a human, not the user.
+
+Defaults are LOOSE for v0.3.3 onward. The strict v0.1.0 defaults (length
+±20%, pov >3, hook ≥2) were calibrated against a hand-picked hook
+fixture; against open-ended daily hooks the LLM produces bodies that
+hit only 0-1 of the 26 hard-coded hook signal phrases, undershoot the
+length target by 30-50%, and routinely use 4-7 POV-action verb matches.
+The v0.3.2 e2e diagnostic showed the strict defaults reject ~70% of
+real LLM bodies. Pass explicit kwargs to recover strict behavior.
+"""
 from __future__ import annotations
 
 import re
@@ -24,9 +33,12 @@ _HOOK_SIGNALS = (
 )
 
 
+# Trim `...` and `……` from the fail list — they're legitimate Chinese
+# trailing-thought punctuation, not "to be continued" signals. LLM uses
+# them stylistically on resolved endings. Keep the real "next episode"
+# phrases so an unfinished cliffhanger still fails.
 _ENDING_FAIL_SIGNALS = (
-    "未完待续", "请看下集", "请看下回", "下章揭晓",
-    "to be continued", "...", "……",
+    "未完待续", "请看下集", "请看下回", "下章揭晓", "to be continued",
 )
 
 
@@ -35,10 +47,11 @@ def heuristic_critique(
     hook: str,
     target_length: int,
     *,
-    length_tolerance: float = 0.20,
+    length_tolerance: float = 0.50,
     hook_window: int = 200,
     ending_window: int = 500,
-    max_pov_switches: int = 3,
+    max_pov_switches: int = 8,
+    min_hook_signals: int = 1,
 ) -> CritiqueReport:
     notes: list[str] = []
     failed: list[str] = []
@@ -46,7 +59,7 @@ def heuristic_critique(
     # --- hook gate ---
     head = body.text[:hook_window]
     hook_hits = sum(1 for s in _HOOK_SIGNALS if s in head)
-    if hook_hits < 2:
+    if hook_hits < min_hook_signals:
         failed.append("hook")
         notes.append(
             f"前 {hook_window} 字只检测到 {hook_hits} 个冲突信号词，"

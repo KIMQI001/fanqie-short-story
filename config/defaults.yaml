@@ -2,10 +2,13 @@ model: MiniMax-M2.7
 api_base: https://api.minimaxi.com/anthropic
 max_retries: 3
 critique:
-  length_tolerance: 0.20
+  # v0.3.3: defaults loosened to match what real LLM output actually looks
+  # like (see critique.py docstring). Pass explicit kwargs to recover strict
+  # v0.1.0–v0.3.2 behavior (±20%, pov >3, hook ≥2).
+  length_tolerance: 0.50
   hook_window_chars: 200
   ending_window_chars: 500
-  max_pov_switches: 3
+  max_pov_switches: 8
   # v0.2.0 additions:
   llm_enabled: true
   llm_max_tokens: 2000
