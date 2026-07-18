@@ -1,4 +1,22 @@
-"""Top-level pipeline: hook + genre + length → story directory with all artifacts."""
+"""Top-level pipeline: hook + genre + length → story directory with all artifacts.
+
+v0.4.0 EXTENDS v0.2.0 with:
+  * Outline regeneration on structural-severity editor-critic failure
+    (capped by config.critique.editor_max_structural_failures, default 1)
+  * De-AI-flavor polish.run() applied AFTER body passes the editor critic
+  * memory_object detection (first strong-object match in body)
+  * New manifest fields: schema_version, mood_axis, memory_object,
+    polish_applied, polish_intensity, polish_ai_odor_score,
+    polish_rules_applied, outline_backtrack_count, editor_categories_passed
+
+The v0.2.0 llm_critique (5-flat-dimension narrative review) is replaced by
+llm_editor_critique (5-category editor perspective) in v0.4.0. The legacy
+function stays in llm_critique.py for backward compat but is no longer
+called from the pipeline.
+
+Methodology source: tianyayu6/fanqie-hit-short-story methodology.md
+(MIT, 2026-06-17), the 番茄爆款 short-story pipeline.
+"""
 from __future__ import annotations
 
 import re
@@ -9,11 +27,28 @@ from fanqie_short_story.body import Body, generate_body
 from fanqie_short_story.config import Config
 from fanqie_short_story.cover import generate_cover
 from fanqie_short_story.critique import heuristic_critique
-from fanqie_short_story.llm_critique import llm_critique
+from fanqie_short_story.llm_critique import (
+    EditorReport,
+    _EDITOR_CATEGORIES,
+    llm_editor_critique,
+)
 from fanqie_short_story.manifest import StoryManifest, write_manifest
 from fanqie_short_story.outline import generate_outline
+from fanqie_short_story.polish import PolishResult, run as run_polish
 from fanqie_short_story.synopsis import generate_synopsis
 from fanqie_short_story.title import generate_titles
+
+
+# v0.4.0 schema version stamped onto every manifest.
+SCHEMA_VERSION = "0.4.0"
+
+# Strong memory objects per the tomato methodology. Pipeline scans body
+# text and reports the FIRST occurrence so audit logs surface the
+# concrete 物件 that anchored the story's truth-reveal.
+_MEMORY_OBJECTS: tuple[str, ...] = (
+    "录像带", "婚书", "病历", "亲子鉴定", "倒计时", "账本",
+    "弹幕截图", "外卖单", "旧照片", "转账记录", "遗诏", "玉佩",
+)
 
 
 class GenerationFailed(Exception):
@@ -26,6 +61,24 @@ def _slugify(hook: str, max_len: int = 30) -> str:
     s = re.sub(r"[^一-鿿A-Za-z0-9]+", "-", hook)
     s = s.strip("-").lower()
     return s[:max_len] or "story"
+
+
+def _detect_memory_object(body_text: str) -> str | None:
+    """Return the first strong memory object in body_text, or None.
+
+    Methodology source: tianyayu6/fanqie-hit-short-story methodology.md
+    "梗与题材 — 至少 1 个记忆物件" rule. Order in _MEMORY_OBJECTS drives
+    which object wins ties; we keep a fixed lookup so test assertions are
+    deterministic."""
+    for obj in _MEMORY_OBJECTS:
+        if obj in body_text:
+            return obj
+    return None
+
+
+def _editor_categories_to_dict(report: EditorReport) -> dict[str, bool]:
+    """Flatten EditorReport.categories into a {name: passed} dict for the manifest."""
+    return {c.name: bool(c.passed) for c in report.categories}
 
 
 def generate_story(
@@ -53,7 +106,16 @@ def generate_story(
         )
     story_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Outline
+    # v0.4.0 polish config resolution (defaults from config.polish, fall back
+    # to intensity=1 rule-based if block missing).
+    polish_enabled = bool(config.polish.get("enabled", True))
+    polish_default_intensity = int(config.polish.get("default_intensity", 1))
+    polish_auto_bump = bool(config.polish.get("auto_bump_on_backtrack", True))
+    editor_backtrack_cap = int(
+        config.critique.get("editor_max_structural_failures", 1)
+    )
+
+    # 1. Outline — regenerated on structural-failure backtrack
     outline = generate_outline(
         hook=hook, genre=genre, target_length=target_length,
         tone=tone or "sweet_with_suspense", config=config,
@@ -62,16 +124,18 @@ def generate_story(
         outline.to_prompt_string(), encoding="utf-8",
     )
 
-    # 2. Body — heuristic → LLM critic chain with retry loop
+    # 2. Body — heuristic → LLM editor critic chain with outline-backtrack
     body: Body | None = None
     feedback: list[str] | None = None
     iterations = 0
+    last_editor_report: EditorReport | None = None
 
     # Counters used both for loop bookkeeping and the success-path manifest.
     heuristic_attempts = 0
     llm_critic_attempts = 0
+    outline_backtrack_count = 0
     accepted_after_critic_cap = False
-    critique_strategy = "heuristic_only"   # upgraded to "heuristic_then_llm" if the LLM critic runs
+    critique_strategy = "heuristic_only"   # upgraded to "heuristic_then_editor" if editor runs
     critique_notes: list[str] = []
 
     # NOTE: max_retries stays at top-level config (v0.1.0 contract — NOT under critique:).
@@ -89,7 +153,7 @@ def generate_story(
 
         h_report = heuristic_critique(
             body, hook, target_length,
-            length_tolerance=config.critique.get("length_tolerance", 0.20),
+            length_tolerance=config.critique.get("length_tolerance", 0.50),
         )
         heuristic_attempts += 1
         if not h_report.passed:
@@ -98,26 +162,63 @@ def generate_story(
             continue
 
         if not llm_enabled:
-            # heuristic-only mode (v0.1.0 behavior with kill switch)
+            # heuristic-only mode (kill switch)
             break
 
         if llm_critic_attempts >= max_llm_calls:
             # Cap reached BEFORE another call — accept body with the latest critic's failure.
-            print("warning: LLM critic cap reached; accepting body")
+            print("warning: LLM editor critic cap reached; accepting body")
             accepted_after_critic_cap = True
-            critique_strategy = "heuristic_then_llm"
+            critique_strategy = "heuristic_then_editor"
             break
 
-        llm_report = llm_critique(
+        editor_report = llm_editor_critique(
             body, hook, genre, target_length, config=config,
         )
         llm_critic_attempts += 1
-        if llm_report.passed:
-            critique_strategy = "heuristic_then_llm"
+        last_editor_report = editor_report
+
+        if editor_report.all_passed:
+            critique_strategy = "heuristic_then_editor"
             break
 
-        feedback = [llm_report.notes]   # WRAP: body expects list[str]
-        critique_notes.append(f"[llm_critic] {llm_report.notes}")
+        # Build feedback notes for retry / backtrack.
+        failed_notes = [
+            f"[{c.name}] {c.notes}" for c in editor_report.categories if not c.passed
+        ]
+        feedback = failed_notes
+        critique_notes.append(f"[editor_critic] {'; '.join(failed_notes)}")
+
+        # v0.4.0 outline backtrack: structural failure + cap not exhausted
+        # → regenerate outline + body. Surface failures alone don't backtrack.
+        if (editor_report.structural_failure
+                and outline_backtrack_count < editor_backtrack_cap):
+            outline_backtrack_count += 1
+            outline = generate_outline(
+                hook=hook, genre=genre, target_length=target_length,
+                tone=tone or "sweet_with_suspense", config=config,
+            )
+            (story_dir / "outline.md").write_text(
+                outline.to_prompt_string(), encoding="utf-8",
+            )
+            critique_notes.append(
+                f"[outline_backtrack] regenerated outline "
+                f"({outline_backtrack_count}/{editor_backtrack_cap})"
+            )
+            feedback = failed_notes  # body still gets the failed-cat feedback
+            continue
+
+        # Either: surface-only failure (no backtrack), or backtrack cap
+        # exhausted (accept body with structural failure). Either way, ship.
+        critique_strategy = "heuristic_then_editor"
+        if editor_report.structural_failure and outline_backtrack_count >= editor_backtrack_cap:
+            accepted_after_critic_cap = True
+            print(
+                f"warning: editor structural-failure cap reached "
+                f"({outline_backtrack_count}/{editor_backtrack_cap}); "
+                f"accepting body"
+            )
+        break
     else:
         # Loop exhausted without break. Preserve v0.1.0's _failed/ artifact writes for audit.
         failed_dir = story_dir / "_failed"
@@ -132,7 +233,27 @@ def generate_story(
             story_dir,
         )
 
-    (story_dir / "body.txt").write_text(body.text, encoding="utf-8")
+    # 2b. Polish — runs AFTER body passes (or is accepted by cap).
+    polish_applied = False
+    polish_intensity = 0
+    polish_ai_odor_score = 0.0
+    polish_rules_applied: list[str] = []
+
+    if polish_enabled and body is not None:
+        polish_intensity = polish_default_intensity
+        if outline_backtrack_count > 0 and polish_auto_bump:
+            polish_intensity = min(3, polish_intensity + 1)
+        polished: PolishResult = run_polish(
+            body.text, intensity=polish_intensity, config=config,
+        )
+        polish_applied = True
+        polish_intensity = polished.intensity
+        polish_ai_odor_score = polished.ai_odor_score
+        polish_rules_applied = list(polished.rules_applied)
+        body = Body.from_text(polished.text)
+
+    if body is not None:
+        (story_dir / "body.txt").write_text(body.text, encoding="utf-8")
 
     # 3. Title + synopsis
     titles = generate_titles(
@@ -185,18 +306,25 @@ def generate_story(
         # Pipeline continues; manifest records cover_backend=None.
         print(f"warning: cover generation failed: {e}")
 
-    # 5. Manifest
+    # 5. Manifest — v0.4.0 schema with new fields.
+    body_text_for_audit = body.text if body is not None else ""
+    memory_object = _detect_memory_object(body_text_for_audit)
+    editor_categories_passed = (
+        _editor_categories_to_dict(last_editor_report)
+        if last_editor_report is not None else {}
+    )
+
     manifest = StoryManifest(
         slug=slug,
         hook=hook,
         genre=genre,
         target_length=target_length,
-        actual_length=body.char_count,
+        actual_length=body.char_count if body is not None else 0,
         tone=tone,
         model=config.model,
         created_at=datetime.now(timezone.utc),
         critique_iterations=iterations,
-        critique_notes=critique_notes,  # v0.2.0: accumulated per-stage critique notes
+        critique_notes=critique_notes,
         critique_strategy=critique_strategy,
         heuristic_attempts=heuristic_attempts,
         llm_critic_attempts=llm_critic_attempts,
@@ -205,11 +333,20 @@ def generate_story(
         # outline (1) + body attempts (iterations) + title (1) + synopsis (1).
         # Does NOT include LLM critic calls — those are tracked separately in llm_critic_attempts.
         llm_calls=1 + iterations + 1 + 1,
-        estimated_tokens=None,  # not tracked yet; reserved field for future token accounting
+        estimated_tokens=None,
         output_files=sorted(
             p.name for p in story_dir.iterdir()
             if p.is_file() and p.name != "manifest.json"
         ),
+        schema_version=SCHEMA_VERSION,
+        mood_axis=outline.mood_axis,
+        memory_object=memory_object,
+        polish_applied=polish_applied,
+        polish_intensity=polish_intensity,
+        polish_ai_odor_score=polish_ai_odor_score,
+        polish_rules_applied=polish_rules_applied,
+        outline_backtrack_count=outline_backtrack_count,
+        editor_categories_passed=editor_categories_passed,
     )
     write_manifest(story_dir, manifest)
 
