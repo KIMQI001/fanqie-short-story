@@ -36,6 +36,7 @@ def generate_story(
     tone: str | None = None,
     output_dir: Path | None = None,
     slug: str | None = None,
+    title: str | None = None,
     config: Config,
     cover_backend: str = "auto",
 ) -> Path:
@@ -150,11 +151,34 @@ def generate_story(
         f"# 简介\n\n{synopsis}\n", encoding="utf-8",
     )
 
+    # Cover title priority: LLM-generated title (from titles.txt) > first
+    # non-blank line of body.txt (chapter heading) > caller-supplied title.
+    # The caller-supplied title is usually a raw fanqie book.title — a *seed*
+    # for scoring/genre matching, NOT the title of our generated novel. We
+    # never want that on the cover of our own output. Fall back to a chapter
+    # heading or body[:30] if the LLM title generator flaked.
+    cover_title = None
+    for line in (story_dir / "titles.txt").read_text(encoding="utf-8").splitlines():
+        line = line.strip().lstrip("0123456789.、) ")
+        if line:
+            cover_title = line
+            break
+    if cover_title is None:
+        # Try the first non-blank, non-# line of body.txt.
+        for line in (story_dir / "body.txt").read_text(encoding="utf-8").splitlines():
+            line = line.strip().lstrip("#").strip()
+            if line:
+                cover_title = line[:30].rstrip(",。;:!?、")
+                break
+    if cover_title is None:
+        cover_title = title  # absolute last resort; caller knows best
+
     # 4. Cover — best-effort; failure does NOT block the rest
     cover_backend_used: str | None = None
     try:
         cover_backend_used = generate_cover(
             slug=slug, hook=hook, genre=genre,
+            title=cover_title,
             output_dir=output_dir, backend=cover_backend,
         )
     except Exception as e:

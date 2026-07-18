@@ -244,6 +244,7 @@ def _run_daily_unlocked(
                 tone=None,
                 output_dir=stories_dir,
                 slug=_slugify_daily(book.title, book.author),
+                title=book.title,
                 config=config,
             )
             _stamp_daily_meta(out, book)

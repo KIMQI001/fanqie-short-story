@@ -120,6 +120,62 @@ def test_generate_cover_config_yaml_uses_mapped_genre(tmp_path: Path) -> None:
     assert "output_name: linggu" in yml
 
 
+def test_generate_cover_uses_default_author(tmp_path: Path) -> None:
+    """Every cover should carry the same byline ("我是btc大户") by default —
+    no more "fanqie-story" leaking through to readers."""
+    captured: dict = {}
+    def fake_run(cmd, **kw):
+        config_path = Path(cmd[cmd.index("--config") + 1])
+        captured["yaml"] = config_path.read_text(encoding="utf-8")
+        return _fake_cover_gen()(cmd, **kw)
+    with patch("fanqie_short_story.cover.subprocess.run", side_effect=fake_run):
+        generate_cover(
+            slug="any-slug", hook="any hook", genre="chuanqi",
+            output_dir=tmp_path,
+        )
+    yml = captured["yaml"]
+    assert "author: 我是btc大户" in yml, f"default author not set; got: {yml}"
+    assert "fanqie-story" not in yml, "stale fanqie-story author leaked"
+
+
+def test_generate_cover_honors_explicit_title_kwarg(tmp_path: Path) -> None:
+    """If a caller passes a real book title (not a synopsis), the cover gets
+    the proper title — not the first 60 chars of the synopsis."""
+    captured: dict = {}
+    def fake_run(cmd, **kw):
+        config_path = Path(cmd[cmd.index("--config") + 1])
+        captured["yaml"] = config_path.read_text(encoding="utf-8")
+        return _fake_cover_gen()(cmd, **kw)
+    long_synopsis = "这是一段非常非常长的简介，远远超过 60 个字符，应该被截断成前 60 个字符传给 cover_gen 当标题，但现在我们显式传了 title 参数，所以应该用显式的。"
+    with patch("fanqie_short_story.cover.subprocess.run", side_effect=fake_run):
+        generate_cover(
+            slug="s", hook=long_synopsis, genre="chuanqi",
+            output_dir=tmp_path, title="化六亿，叶虫始祖",
+        )
+    yml = captured["yaml"]
+    assert "title: 化六亿，叶虫始祖" in yml, f"explicit title not honored; got: {yml}"
+    # And the hook-derived title (first 60 chars of synopsis) must NOT appear.
+    assert long_synopsis[:60] not in yml
+
+
+def test_generate_cover_falls_back_to_hook_truncation_when_no_title(
+    tmp_path: Path,
+) -> None:
+    """When no title is passed, the legacy behavior (first 60 chars of hook)
+    is preserved — keeps backwards compat for callers that only have a hook."""
+    captured: dict = {}
+    def fake_run(cmd, **kw):
+        config_path = Path(cmd[cmd.index("--config") + 1])
+        captured["yaml"] = config_path.read_text(encoding="utf-8")
+        return _fake_cover_gen()(cmd, **kw)
+    with patch("fanqie_short_story.cover.subprocess.run", side_effect=fake_run):
+        generate_cover(
+            slug="s", hook="灵骨试炼", genre="chuanqi", output_dir=tmp_path,
+        )
+    yml = captured["yaml"]
+    assert "title: 灵骨试炼" in yml, f"hook-fallback title missing; got: {yml}"
+
+
 # ---------------------------------------------------------------------------
 # Genre mapping
 # ---------------------------------------------------------------------------

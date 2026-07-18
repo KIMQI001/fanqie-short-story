@@ -31,6 +31,7 @@ import yaml
 
 COVER_GEN_BIN = "cover_gen"  # must be on PATH; installed via `pip install -e ~/CascadeProjects/projects/book`
 DEFAULT_BACKEND = "auto"
+DEFAULT_AUTHOR = "我是btc大户"  # shown on every cover; was "fanqie-story" through v0.3.4
 
 # Default project root for cover_gen (its `config/` and `genres/` dirs live here).
 # Override by passing `cover_gen_project_root` to generate_cover().
@@ -64,6 +65,8 @@ def generate_cover(
     genre: str,
     output_dir: Path,
     *,
+    title: str | None = None,
+    author: str = DEFAULT_AUTHOR,
     backend: str = DEFAULT_BACKEND,
     timeout: int = 600,
     cover_gen_project_root: Path = _DEFAULT_COVER_GEN_PROJECT_ROOT,
@@ -74,6 +77,13 @@ def generate_cover(
     `cover_gen_project_root` is the cover_gen repo (must contain `config/`
     and `genres/`). Defaults to the project's known install path; pass an
     explicit value to override in tests or other environments.
+
+    `title` is what shows up on the cover. If None, falls back to the first
+    60 chars of `hook` (the synopsis) — kept for backwards compat with
+    callers that only have a hook in hand. Pass the original book title
+    (e.g. `book.title`) for proper cover typography.
+
+    `author` defaults to "我是btc大户" — the byline shown on every cover.
 
     Returns the backend used by cover_gen (parsed from its manifest).
     Raises CoverError on subprocess failure, missing cover_gen on PATH,
@@ -99,8 +109,8 @@ def generate_cover(
                 {
                     "books": [
                         {
-                            "title": hook[:60],
-                            "author": "fanqie-story",
+                            "title": title if title else hook[:60],
+                            "author": author,
                             "genre": _map_genre(genre),
                             "synopsis": hook[:200],
                             "output_name": slug,
