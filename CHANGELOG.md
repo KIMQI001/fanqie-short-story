@@ -1,5 +1,21 @@
 # Changelog
 
+## [v0.3.4] - 2026-07-18
+
+### Fixed
+- **cover.py now actually generates covers.** Since v0.1.0 the wrapper passed `--book-id / --genre / --title` flags that cover_gen v0.1.0 does NOT accept — cover_gen exited 2 with `No such option '--book-id'`, `cover.py` raised `CoverError`, and `pipeline.py` silently swallowed it. The bug was masked because the v0.1.0 e2e test (`test_real_generate.py`) only asserted that `cover_gen` was on PATH, not that a cover was actually produced. The new `tests/e2e/test_daily_run_once.py` `cover_count >= 1` assertion (added in v0.3.0) surfaced it on the next e2e run, where all 5 stories had `cover_backend=null`.
+- **Rewrote cover.py** to drive cover_gen's actual API. cover_gen v0.1.0 is a batch tool driven by `books.yaml`; it has no per-book invocation mode. The new wrapper:
+  1. Maps fanqie-short-story's 5 umbrella genres to cover_gen's 4-genre taxonomy (`chuanqi → xuanhuan`, `xianyan → yanqing`, `xuanyi → mystery`, `tianchong → yanqing`, `naodong → other`).
+  2. Writes a single-entry `books.yaml` to a fresh `tempfile.mkdtemp(prefix="fanqie_cover_")` workdir.
+  3. Invokes `cover_gen generate --config <yaml> --project-root <cover_gen repo> --output-root <workdir>/out --backend auto`.
+  4. Harvests `<workdir>/out/<slug>/draft/cover.png` (the v0.3.3 wrapper incorrectly assumed top-level `<output>/<slug>/cover.jpg`, which cover_gen never wrote).
+  5. Reads `backend` from cover_gen's `<workdir>/out/<slug>/manifest.json` (top-level `backend` field, not nested).
+  6. Removes the temp workdir in a `finally` block — even on cover_gen subprocess failure or no-cover-file raised exception.
+
+### Tests
+- 111 unit tests pass (102 v0.3.3 + 9 cover.py: 4 new + 5 rewritten). The 5 rewritten tests previously locked in the broken `--book-id` contract; they now assert `--config + --project-root + --output-root + --backend` (no per-book flags). 3 unchanged tests (`raises_on_subprocess_failure`, `raises_when_no_cover_file`, `raises_when_cover_gen_not_on_path`) continue to assert correct failure modes.
+- E2E `tests/e2e/test_daily_run_once.py` PASSED against live MiniMax-M2.7 + live ComfyUI: 5/5 stories succeeded, all 5 have ~1.7-1.8MB `cover.jpg` in story dirs, `cover_backend='comfyui'` correctly read from cover_gen's manifest, total run 1:18:18 (cover gen added ~50min over v0.3.3's 25min for 5 SDXL-on-ComfyUI renders).
+
 ## [v0.3.3] - 2026-07-18
 
 ### Changed
