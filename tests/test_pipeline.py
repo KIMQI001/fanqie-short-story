@@ -23,13 +23,21 @@ def _outline() -> Outline:
 
 
 def _llm_critique_pass():
-    """Return an llm_critique side_effect that always PASSes (no network)."""
-    from fanqie_short_story.llm_critique import LLMCritiqueReport
+    """Return an llm_editor_critique side_effect that always PASSes (no network).
+
+    v0.4.0: pipeline now uses llm_editor_critique (5-category editor review)
+    instead of v0.2.0's llm_critique. This helper builds a pass-everything
+    EditorReport."""
+    from fanqie_short_story.llm_critique import EditorReport, CategoryVerdict
 
     def _fake(*a, **kw):
-        return LLMCritiqueReport(
-            passed=True, notes="", mentioned_aspects=[], raw_response="VERDICT: PASS",
-        )
+        return EditorReport(categories=[
+            CategoryVerdict(name="开篇", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="梗与题材", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="情绪兑现", passed=True, notes="", severity="surface"),
+            CategoryVerdict(name="人物", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="节奏", passed=True, notes="", severity="surface"),
+        ])
     return _fake
 
 
@@ -54,7 +62,7 @@ def test_generate_story_writes_all_outputs(tmp_path: Path, fake_config) -> None:
         return "minimax"
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", side_effect=fake_titles), \
          patch("fanqie_short_story.pipeline.generate_synopsis", side_effect=fake_synopsis), \
          patch("fanqie_short_story.pipeline.generate_cover", side_effect=fake_cover):
@@ -90,7 +98,7 @@ def test_generate_story_retries_on_critique_fail(tmp_path: Path, fake_config) ->
         return Body.from_text(text)
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -131,7 +139,7 @@ def test_generate_story_continues_when_cover_fails(tmp_path: Path, fake_config) 
         return Body.from_text(text)
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=_llm_critique_pass()), \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=_llm_critique_pass()), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover",
@@ -162,13 +170,19 @@ def test_pipeline_runs_llm_critic_after_heuristic_pass(tmp_path, fake_config) ->
         from fanqie_short_story.critique import CritiqueReport
         return CritiqueReport(passed=True, notes=[], failed_gates=[])
     def fake_llm_critique(*a, **kw):
-        from fanqie_short_story.llm_critique import LLMCritiqueReport
-        return LLMCritiqueReport(passed=True, notes="", mentioned_aspects=[], raw_response="VERDICT: PASS")
+        from fanqie_short_story.llm_critique import EditorReport, CategoryVerdict
+        return EditorReport(categories=[
+            CategoryVerdict(name="开篇", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="梗与题材", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="情绪兑现", passed=True, notes="", severity="surface"),
+            CategoryVerdict(name="人物", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="节奏", passed=True, notes="", severity="surface"),
+        ])
 
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
          patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic) as mock_h, \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=fake_llm_critique) as mock_llm, \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=fake_llm_critique) as mock_llm, \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -179,7 +193,7 @@ def test_pipeline_runs_llm_critic_after_heuristic_pass(tmp_path, fake_config) ->
     assert mock_h.call_count == 1
     assert mock_llm.call_count == 1
     data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-    assert data["critique_strategy"] == "heuristic_then_llm"
+    assert data["critique_strategy"] == "heuristic_then_editor"
     assert data["llm_critic_attempts"] == 1
     assert data["accepted_after_critic_cap"] is False
 
@@ -199,18 +213,29 @@ def test_pipeline_retries_when_llm_critic_fails(tmp_path, fake_config) -> None:
         return CritiqueReport(passed=True, notes=[], failed_gates=[])
     call_count = {"llm": 0}
     def fake_llm_critique(*a, **kw):
-        from fanqie_short_story.llm_critique import LLMCritiqueReport
+        from fanqie_short_story.llm_critique import EditorReport, CategoryVerdict
         call_count["llm"] += 1
         if call_count["llm"] == 1:
-            return LLMCritiqueReport(passed=False, notes="情节拖沓",
-                                      mentioned_aspects=["情节"], raw_response="VERDICT: FAIL")
-        return LLMCritiqueReport(passed=True, notes="", mentioned_aspects=[],
-                                  raw_response="VERDICT: PASS")
+            # Surface-only failure (节奏) → pipeline retries body, no outline backtrack
+            return EditorReport(categories=[
+                CategoryVerdict(name="开篇", passed=True, notes="", severity="structural"),
+                CategoryVerdict(name="梗与题材", passed=True, notes="", severity="structural"),
+                CategoryVerdict(name="情绪兑现", passed=True, notes="", severity="surface"),
+                CategoryVerdict(name="人物", passed=True, notes="", severity="structural"),
+                CategoryVerdict(name="节奏", passed=False, notes="节奏拖沓", severity="surface"),
+            ])
+        return EditorReport(categories=[
+            CategoryVerdict(name="开篇", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="梗与题材", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="情绪兑现", passed=True, notes="", severity="surface"),
+            CategoryVerdict(name="人物", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="节奏", passed=True, notes="", severity="surface"),
+        ])
 
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
          patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=fake_llm_critique), \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=fake_llm_critique), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -236,7 +261,7 @@ def test_pipeline_skips_llm_critic_when_heuristic_fails(tmp_path, fake_config) -
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=always_bad_body), \
          patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fail_heuristic), \
-         patch("fanqie_short_story.pipeline.llm_critique") as mock_llm, \
+         patch("fanqie_short_story.pipeline.llm_editor_critique") as mock_llm, \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -262,14 +287,22 @@ def test_pipeline_caps_llm_critic_calls(tmp_path, fake_config) -> None:
         from fanqie_short_story.critique import CritiqueReport
         return CritiqueReport(passed=True, notes=[], failed_gates=[])
     def always_fail_llm_critique(*a, **kw):
-        from fanqie_short_story.llm_critique import LLMCritiqueReport
-        return LLMCritiqueReport(passed=False, notes="情节差",
-                                  mentioned_aspects=["情节"], raw_response="VERDICT: FAIL")
+        # v0.4.0: pipeline uses EditorReport (5 categories, surface vs
+        # structural severity). Surface-only failure so the cap is hit
+        # WITHOUT triggering outline backtrack.
+        from fanqie_short_story.llm_critique import EditorReport, CategoryVerdict
+        return EditorReport(categories=[
+            CategoryVerdict(name="开篇", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="梗与题材", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="情绪兑现", passed=True, notes="", severity="surface"),
+            CategoryVerdict(name="人物", passed=True, notes="", severity="structural"),
+            CategoryVerdict(name="节奏", passed=False, notes="节奏拖沓", severity="surface"),
+        ])
 
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
          patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
-         patch("fanqie_short_story.pipeline.llm_critique", side_effect=always_fail_llm_critique), \
+         patch("fanqie_short_story.pipeline.llm_editor_critique", side_effect=always_fail_llm_critique), \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):
@@ -298,7 +331,7 @@ def test_pipeline_records_critique_strategy_in_manifest(tmp_path, fake_config) -
     with patch("fanqie_short_story.pipeline.generate_outline", side_effect=fake_outline), \
          patch("fanqie_short_story.pipeline.generate_body", side_effect=fake_body), \
          patch("fanqie_short_story.pipeline.heuristic_critique", side_effect=fake_heuristic), \
-         patch("fanqie_short_story.pipeline.llm_critique") as mock_llm, \
+         patch("fanqie_short_story.pipeline.llm_editor_critique") as mock_llm, \
          patch("fanqie_short_story.pipeline.generate_titles", return_value=["t"]), \
          patch("fanqie_short_story.pipeline.generate_synopsis", return_value="s"), \
          patch("fanqie_short_story.pipeline.generate_cover", return_value="minimax"):

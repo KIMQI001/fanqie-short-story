@@ -1,5 +1,57 @@
 # Changelog
 
+## [v0.4.0] - 2026-07-19 — Tomato Hit Methodology
+
+**Major writing-layer rewrite.** Each generated short story now follows the
+tomato (番茄) hit-structure grammar ported from the public-domain
+`tianyayu6/fanqie-hit-short-story` methodology.
+
+### Added
+- `src/fanqie_short_story/polish.py` — de-AI-flavor post-processor (rule-based
+  intensity 0..3; default intensity 1, no LLM cost). Auto-bumps to intensity 2
+  when the outline-backtrack path fires.
+- `Outline.ChapterSpec` — 10-chapter schema (事故→反击→加压→反转→低谷→反杀→对峙→最大反转→清算→收束) and `Outline.premise` — 5-element premise decomposition (身份错位, 状态落差, 不可逆选择, 公开压力, 情绪补偿).
+- `Outline.mood_axis` — emotional axis (major + optional minor); surfaced in
+  the manifest as `mood_axis`.
+- `llm_editor_critique()` — 5-category editor critic (开篇 / 梗与题材 /
+  情绪兑现 / 人物 / 节奏) with structural-vs-surface severity. Replaces
+  v0.2.0's 5-dimension `llm_critique()`.
+- **6 new heuristic rules** in `heuristic_critique()`: weather/dream opener,
+  three-paragraph monologue, abstract metaphors, passive protagonist,
+  ungrounded twist, missing memory object.
+- `length_tier` config block (ultra_short 8k-24.9k; default 12000 chars).
+- Manifest fields: `schema_version`, `polish_applied`, `polish_intensity`,
+  `polish_ai_odor_score`, `polish_rules_applied`, `outline_backtrack_count`,
+  `editor_categories_passed`, `memory_object`, `mood_axis`.
+- E2E test: `tests/e2e/test_tomato_methodology.py` (gated `-m e2e`).
+
+### Changed
+- `generate_body()` system prompt now injects 6 density constraints (opening
+  hook, 600-800字 density, chapter-end hook, active protagonist, memory
+  object, no forbidden metaphors).
+- `generate_synopsis()` returns the three-segment 导语 combined; old behavior
+  preserved via the `generate_synopsis` shim that calls `generate_lead()`.
+- Pipeline loop gains an outline-backtrack path: structural-severity editor
+  failure → regenerate outline → regenerate body (capped at 1 per story by
+  `config.critique.editor_max_structural_failures`). Surface-only failures
+  retry the body without outline regeneration.
+- Critique strategy renamed `heuristic_then_llm` → `heuristic_then_editor`
+  (5-category editor perspective, not flat 5-dim narrative review).
+- Default `target_length`: 8000 → 12000 chars.
+
+### Migration
+- Existing `output/stories/*/manifest.json` files remain readable (new fields
+  default to None / 0 / empty list).
+- `daily.py`, `daemon.py`, cover pipeline unaffected.
+- See `docs/superpowers/specs/2026-07-19-fanqie-short-story-v0.4.0-tomato-methodology-design.md` for full design.
+
+### Tests
+- 185 unit tests pass (was 111 at v0.3.4). New tests: `test_pipeline_v040.py`
+  (12), `test_body_v040.py`, `test_critique_v040.py`, `test_outline_v040.py`,
+  `test_editor_critic.py`, `test_polish.py`, plus 5 rewritten synopsis tests.
+- E2E not re-run for this release; expected to need polish-prompthoning as
+  the methodology sources additional banned-metaphor enforcement rules.
+
 ## [v0.3.4] - 2026-07-18
 
 ### Fixed

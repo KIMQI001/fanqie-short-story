@@ -28,6 +28,13 @@ class Config:
     genre_mapping: dict[str, str]
     daily: dict[str, Any] = field(default_factory=dict)
 
+    # v0.4.0 additions — tomato methodology config blocks. All are dicts
+    # (not strongly-typed) so they can be loaded straight from YAML without
+    # extra dataclasses. Callers access them via dict lookups.
+    polish: dict[str, Any] = field(default_factory=dict)
+    mood_axis: dict[str, Any] = field(default_factory=dict)
+    length_tier: dict[str, Any] = field(default_factory=dict)
+
 
 def load_config(yaml_path: Path | str) -> Config:
     """Load config from YAML + env. Fail-fast on missing API key."""
@@ -60,4 +67,7 @@ def load_config(yaml_path: Path | str) -> Config:
         cover=raw.get("cover", {}),
         genre_mapping=raw.get("genre_mapping", {}),
         daily=raw.get("daily", {}),
+        polish=raw.get("polish", {}),
+        mood_axis=raw.get("mood_axis", {}),
+        length_tier=raw.get("length_tier", {}),
     )

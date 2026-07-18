@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +30,17 @@ class StoryManifest:
     heuristic_attempts: int = 0
     llm_critic_attempts: int = 0
     accepted_after_critic_cap: bool = False
+
+    # v0.4.0 additions — tomato methodology audit trail.
+    schema_version: str = "0.4.0"
+    mood_axis: tuple[str, str | None] | None = None
+    memory_object: str | None = None
+    polish_applied: bool = False
+    polish_intensity: int = 0
+    polish_ai_odor_score: float = 0.0
+    polish_rules_applied: list[str] = field(default_factory=list)
+    outline_backtrack_count: int = 0
+    editor_categories_passed: dict[str, bool] = field(default_factory=dict)
 
 
 def write_manifest(output_dir: Path, manifest: StoryManifest) -> Path:

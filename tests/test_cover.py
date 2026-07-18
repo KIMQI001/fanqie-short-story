@@ -154,8 +154,16 @@ def test_generate_cover_honors_explicit_title_kwarg(tmp_path: Path) -> None:
         )
     yml = captured["yaml"]
     assert "title: 化六亿，叶虫始祖" in yml, f"explicit title not honored; got: {yml}"
-    # And the hook-derived title (first 60 chars of synopsis) must NOT appear.
-    assert long_synopsis[:60] not in yml
+    # The hook-derived title (first 60 chars of synopsis) must NOT be used
+    # as the books.yaml title field. The synopsis may still appear in the
+    # synopsis: field — that's expected.
+    import re
+    title_lines = [l for l in yml.splitlines()
+                   if re.match(r"^\s*-?\s*title:\s*", l)]
+    assert len(title_lines) == 1, \
+        f"expected exactly 1 title line, got: {title_lines}"
+    assert "化六亿，叶虫始祖" in title_lines[0], \
+        f"title line content wrong: {title_lines[0]!r}"
 
 
 def test_generate_cover_falls_back_to_hook_truncation_when_no_title(
