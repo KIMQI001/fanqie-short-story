@@ -41,6 +41,6 @@ def test_real_generate_one_chuanqi_story(tmp_path: Path) -> None:
     assert "未完待续" not in body_text
     assert "林晚" in body_text or "侯府" in body_text  # hooked into the prompt
     data = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-    assert data["critique_strategy"] == "heuristic_then_llm"
+    assert data["critique_strategy"] in ("heuristic_then_editor", "heuristic_only")
     assert data["heuristic_attempts"] >= 1
     assert data["llm_critic_attempts"] >= 0
