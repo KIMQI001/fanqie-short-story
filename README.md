@@ -104,6 +104,66 @@ substitute pool), randomizes the priority order, and generates each story
 end-to-end. If a story fails, the next pool entry is tried. Each day's run
 is summarized in `output/daily/<date>/daily_manifest.json`.
 
+## v0.4.0 — Tomato Hit Methodology
+
+Major writing-layer rewrite. Each generated short story now follows the
+tomato (番茄) hit-structure grammar:
+
+- 10-chapter template (事故→反击→加压→反转→低谷→反杀→对峙→最大反转→清算→收束)
+- 5-element premise decomposition (身份错位 + 状态落差 + 不可逆选择 + 公开压力 + 情绪补偿)
+- 5-category editor critic (开篇 / 梗与题材 / 情绪兑现 / 人物 / 节奏)
+  replaces v0.2.0's 5-dimension `llm_critique()`.
+- 6 hard 写作禁区 rules in heuristic critique (weather/dream opener,
+  three-paragraph monologue, abstract metaphors, passive protagonist,
+  ungrounded twist, missing memory object)
+- Outline-backtrack on structural-severity editor failure (capped at 1 per
+  story). Surface failures still retry the body without regen.
+- New `polish.py` — rule-based de-AI-flavor (intensity 0..3); default
+  intensity 1 (no LLM cost). Auto-bumps to intensity 2 when outline
+  backtrack fires.
+
+### New config (`config/defaults.yaml`)
+
+```yaml
+mood_axis:
+  default: { major: 爽, minor: null }
+
+length_tier:
+  ultra_short: { min_chars: 8000, default_chars: 12000, max_chars: 24900 }
+  default: ultra_short
+
+polish:
+  enabled: true
+  default_intensity: 1
+  auto_bump_on_backtrack: true
+
+critique:
+  editor_max_structural_failures: 1   # outline-backtrack cap
+```
+
+### What stays the same
+
+- `cover` (delegates to `cover_gen` CLI)
+- `daily` orchestrator (v0.3.0)
+- `daemon` (v0.3.0)
+- Pipeline CLI flags `generate`, `batch`, `daily`, `daemon` signatures
+  unchanged. New behavior is opt-in via config.
+
+### Backward compatibility
+
+- Manifest readers ignoring unknown fields keep working (additive only).
+- Existing `output/stories/*/manifest.json` files remain readable (new
+  fields default to None).
+- Default `target_length` bumps from 8000 → 12000. Override via
+  `--length 8000` if needed.
+- `daily.py`, `daemon.py`, cover pipeline unaffected.
+
+### Methodology source
+
+Adapted from tianyayu6/fanqie-hit-short-story `methodology.md` (MIT,
+2026-06-17), the 番茄爆款 short-story pipeline. Code rephrased; structure
+and rules borrowed.
+
 ## Architecture
 
 See `docs/superpowers/specs/2026-07-16-fanqie-short-story-design.md` (in the
